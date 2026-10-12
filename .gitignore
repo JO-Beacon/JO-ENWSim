@@ -30,6 +30,19 @@ pnpm-debug.log*
 # 其它
 *.log
 
+# Dart / Flutter
+.dart_tool/
+.flutter-plugins-dependencies
+.pub/
+.pub-cache/
+/coverage/
+**/doc/api/
+**/ios/Flutter/.last_build_id
+*.iml
+migrate_working_dir/
+app.*.symbols
+app.*.map.json
+
 # 私有 / 内部文件（不进公开仓库）
 AGENTS/
 AGENTS.md
