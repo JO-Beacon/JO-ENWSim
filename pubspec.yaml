@@ -13,6 +13,8 @@ dependencies:
   flutter_markdown_plus: ^1.0.7
   markdown: ^7.3.0
   url_launcher: ^6.3.2
+  package_info_plus: ^9.0.0
+  shared_preferences: ^2.3.0
 
 dev_dependencies:
   flutter_test:
@@ -31,3 +33,6 @@ flutter:
           weight: 500
         - asset: assets/fonts/SourceHanSansSC-Bold.otf
           weight: 700
+    - family: NotoSerifSC
+      fonts:
+        - asset: assets/fonts/NotoSerifSC-VF.ttf
