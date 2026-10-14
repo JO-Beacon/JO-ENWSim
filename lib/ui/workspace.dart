@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../model/demo.dart';
+import '../model/provider.dart';
 import '../theme/tokens.dart';
 import 'common.dart';
 import 'new_world_dialog.dart';
@@ -27,16 +28,21 @@ class Workspace extends StatefulWidget {
     super.key,
     required this.settings,
     required this.onSettingsChanged,
+    required this.providers,
+    required this.onProvidersChanged,
   });
 
   final JoSettings settings;
   final ValueChanged<JoSettings> onSettingsChanged;
+  final List<Provider> providers;
+  final ValueChanged<List<Provider>> onProvidersChanged;
 
   @override
   State<Workspace> createState() => _WorkspaceState();
 }
 
-class _WorkspaceState extends State<Workspace> {
+class _WorkspaceState extends State<Workspace>
+    with SingleTickerProviderStateMixin {
   final TextEditingController _input = TextEditingController();
   final TransformationController _tc = TransformationController();
   Size _viewport = Size.zero;
@@ -48,6 +54,19 @@ class _WorkspaceState extends State<Workspace> {
   double _sideW = 300;
   String? _focused;
   int? _selected;
+
+  /// 当前选的模型（只存在内存里，还没接引擎）。
+  String? _model;
+
+  /// 聚焦展开的过渡。_animId = 正在过渡的那一列；_focusT 是进度。
+  /// 关闭时 _focused 立即清空（逻辑上已经不聚焦了），但 _animId 留到动画结束，
+  /// 这样宽度能平滑收回去、而不是“哺”一下跳回来。
+  String? _animId;
+
+  late final AnimationController _focusAnim = AnimationController(
+    vsync: this,
+    duration: const Duration(milliseconds: 220),
+  );
 
   World get _world =>
       _worlds.firstWhere((World w) => w.id == _worldId);
@@ -107,9 +126,15 @@ class _WorkspaceState extends State<Workspace> {
 
   double get _rowH => _cardH + _cardGap;
 
+  /// 列宽。聚焦过渡中，卡片、表头、**底层连线**都是用这个值算的，
+  /// 所以它们会一起动，不会错位。
+  /// 列宽。聚焦过渡中，卡片、表头、底层连线都用这个值算，
+  /// 所以它们会一起动，不会错位。
   double _colW(String id) {
-    if (_focused == null) return _wCompact;
-    return id == _focused ? _wFocus : _wShrunk;
+    if (_animId == null) return _wCompact;
+    final double t = Curves.easeOutCubic.transform(_focusAnim.value);
+    final double target = id == _animId ? _wFocus : _wShrunk;
+    return _wCompact + (target - _wCompact) * t;
   }
 
   Map<String, double> get _colX {
@@ -163,15 +188,50 @@ class _WorkspaceState extends State<Workspace> {
   }
 
   void _focusLane(String id, {int? index}) {
+    final bool closing = _focused == id && index == null;
     setState(() {
-      if (_focused == id && index == null) {
+      if (closing) {
         _focused = null;
         _selected = null;
+        _focusAnim.reverse().whenComplete(() {
+          if (mounted && _focused == null) setState(() => _animId = null);
+        });
       } else {
         _focused = id;
         _selected = index;
+        _animId = id;
+        _focusAnim.forward();
       }
     });
+  }
+
+  /// 可选的模型：启用的服务商下面、启用着的模型。
+  List<({String provider, List<String> models})> get _modelGroups {
+    final List<({String provider, List<String> models})> out =
+        <({String provider, List<String> models})>[];
+    for (final Provider pv in widget.providers) {
+      if (!pv.enabled) continue;
+      final List<String> ids = <String>[
+        for (final ModelRef m in pv.models)
+          if (m.enabled && m.id.trim().isNotEmpty) m.id,
+      ];
+      if (ids.isEmpty) continue;
+      out.add((provider: pv.name, models: ids));
+    }
+    return out;
+  }
+
+  Future<void> _pickModel() async {
+    final String? picked = await showDialog<String>(
+      context: context,
+      barrierColor: Colors.black.withValues(alpha: 0.55),
+      builder: (BuildContext c) => _ModelPickerDialog(
+        groups: _modelGroups,
+        current: _model,
+      ),
+    );
+    if (picked == null || !mounted) return;
+    setState(() => _model = picked);
   }
 
   void _submit() {
@@ -179,6 +239,9 @@ class _WorkspaceState extends State<Workspace> {
     if (t.isEmpty) return;
     setState(() {
       _selected = null;
+      _focused = 'l1';
+      _animId = 'l1';
+      _focusAnim.forward();
     });
     _input.clear();
   }
@@ -187,19 +250,39 @@ class _WorkspaceState extends State<Workspace> {
   void dispose() {
     _input.dispose();
     _tc.dispose();
+    _focusAnim.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    if (_page == _Page.settings) {
-      return SettingsPage(
-        settings: widget.settings,
-        onChanged: widget.onSettingsChanged,
-        onBack: () => setState(() => _page = _Page.main),
-      );
-    }
+    final Widget body = _page == _Page.settings
+        ? SettingsPage(
+            settings: widget.settings,
+            onChanged: widget.onSettingsChanged,
+            providers: widget.providers,
+            onProvidersChanged: widget.onProvidersChanged,
+            onBack: () => setState(() => _page = _Page.main),
+          )
+        : _mainPage();
+    // 页面切换：160ms 淡入淡出（克制，不做位移 / 缩放）
+    // layoutBuilder 给紧约束：里面有 Row + Expanded，默认那个松散 Stack 撑不起来。
+    return AnimatedSwitcher(
+      duration: const Duration(milliseconds: 160),
+      layoutBuilder: (Widget? current, List<Widget> previous) => Stack(
+        fit: StackFit.expand,
+        children: <Widget>[
+          ...previous,
+          ?current,
+        ],
+      ),
+      transitionBuilder: (Widget child, Animation<double> a) =>
+          FadeTransition(opacity: a, child: child),
+      child: body,
+    );
+  }
 
+  Widget _mainPage() {
     final JoPalette p = JoTheme.of(context);
 
     return Container(
@@ -235,6 +318,11 @@ class _WorkspaceState extends State<Workspace> {
                   child: _world.lanes.isEmpty
                       ? _EmptyWorld(palette: p)
                       : _canvas(p),
+                ),
+                _ComposeBar(
+                  palette: p,
+                  model: _model,
+                  onPickModel: _pickModel,
                 ),
                 _InputBar(
                   palette: p,
@@ -326,7 +414,6 @@ class _WorkspaceState extends State<Workspace> {
   }
 
   Widget _canvas(JoPalette p) {
-    final Map<String, double> colX = _colX;
     return ClipRect(
       child: LayoutBuilder(
         builder: (BuildContext context, BoxConstraints c) {
@@ -340,34 +427,42 @@ class _WorkspaceState extends State<Workspace> {
               scaleEnabled: false,
               boundaryMargin:
                   const EdgeInsets.only(right: 480, bottom: 480),
-              child: SizedBox(
-                width: _totalW,
-                height: _totalH,
-                child: Stack(
-                  children: <Widget>[
-                    Positioned.fill(
-                      child: CustomPaint(
-                        painter: _CanvasPainter(
-                          palette: p,
-                          colX: colX,
-                          colW: _colW,
-                          headerH: _headerH,
-                          cardH: _cardH,
-                          rowH: _rowH,
-                          gap: _gap,
-                          maxRows: _maxRows,
-                          rows: _rows,
-                          rulerW: _rulerW,
-                          totalW: _totalW,
-                          lanes: _world.lanes,
-                          moves: _world.moves,
+              // 聚焦展开的动画：卡片 / 表头 / 底层连线都在这里重建，
+              // 用的是同一份插值后的列宽，所以不会错位。
+              child: AnimatedBuilder(
+                animation: _focusAnim,
+                builder: (BuildContext context, Widget? _) {
+                  final Map<String, double> colX = _colX;
+                  return SizedBox(
+                    width: _totalW,
+                    height: _totalH,
+                    child: Stack(
+                      children: <Widget>[
+                        Positioned.fill(
+                          child: CustomPaint(
+                            painter: _CanvasPainter(
+                              palette: p,
+                              colX: colX,
+                              colW: _colW,
+                              headerH: _headerH,
+                              cardH: _cardH,
+                              rowH: _rowH,
+                              gap: _gap,
+                              maxRows: _maxRows,
+                              rows: _rows,
+                              rulerW: _rulerW,
+                              totalW: _totalW,
+                              lanes: _world.lanes,
+                              moves: _world.moves,
+                            ),
+                          ),
                         ),
-                      ),
+                        ..._headers(p, colX),
+                        ..._steps(p, colX),
+                      ],
                     ),
-                    ..._headers(p, colX),
-                    ..._steps(p, colX),
-                  ],
-                ),
+                  );
+                },
               ),
             ),
           );
@@ -386,15 +481,18 @@ class _WorkspaceState extends State<Workspace> {
           top: 10,
           width: _colW(lane.id),
           height: _headerH - 14,
-          child: GestureDetector(
+          child: JoTap(
             onTap: () => _focusLane(lane.id),
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: Container(
+            builder: (BuildContext context, bool hover, bool down) {
+              return AnimatedContainer(
+                duration: kJoTapMs,
+                curve: Curves.easeOut,
                 padding: const EdgeInsets.symmetric(horizontal: JoSpace.s3),
                 decoration: BoxDecoration(
-                  color: on ? p.surface : p.bg,
-                  border: JoShape.border(on ? p.accent : p.border),
+                  color: on
+                      ? p.surface
+                      : (hover ? p.surface.withValues(alpha: 0.5) : p.bg),
+                  border: JoShape.border(on || hover ? p.accent : p.border),
                   borderRadius: JoShape.br,
                 ),
                 child: Row(
@@ -425,8 +523,8 @@ class _WorkspaceState extends State<Workspace> {
                     ],
                   ],
                 ),
-              ),
-            ),
+              );
+            },
           ),
         ),
       );
@@ -613,18 +711,21 @@ class _WorldTile extends StatelessWidget {
     final JoPalette p = palette;
     return Padding(
       padding: const EdgeInsets.only(bottom: JoSpace.s2),
-      child: GestureDetector(
+      child: JoTap(
         onTap: onTap,
-        child: MouseRegion(
-          cursor: SystemMouseCursors.click,
-          child: Container(
+        builder: (BuildContext context, bool hover, bool down) {
+          return AnimatedContainer(
+            duration: kJoTapMs,
+            curve: Curves.easeOut,
             padding: const EdgeInsets.symmetric(
               horizontal: JoSpace.s3,
               vertical: JoSpace.s3,
             ),
             decoration: BoxDecoration(
-              color: on ? p.surface : p.bg,
-              border: JoShape.border(on ? p.accent : p.border),
+              color: on
+                  ? p.surface
+                  : (hover ? p.surface.withValues(alpha: 0.5) : p.bg),
+              border: JoShape.border(on || hover ? p.accent : p.border),
               borderRadius: JoShape.br,
             ),
             child: Column(
@@ -667,8 +768,8 @@ class _WorldTile extends StatelessWidget {
                 ),
               ],
             ),
-          ),
-        ),
+          );
+        },
       ),
     );
   }
@@ -909,23 +1010,39 @@ class _EmptyWorld extends StatelessWidget {
 // ————————————————————————————— 侧栏拖动条
 
 /// 竖拖动条：按住左右拖，改两侧栏宽。
-class _VDrag extends StatelessWidget {
+class _VDrag extends StatefulWidget {
   const _VDrag({required this.palette, required this.onDrag});
 
   final JoPalette palette;
   final ValueChanged<double> onDrag;
 
   @override
+  State<_VDrag> createState() => _VDragState();
+}
+
+class _VDragState extends State<_VDrag> {
+  bool _hover = false;
+
+  @override
   Widget build(BuildContext context) {
+    final JoPalette p = widget.palette;
     return MouseRegion(
       cursor: SystemMouseCursors.resizeLeftRight,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onHorizontalDragUpdate: (DragUpdateDetails d) => onDrag(d.delta.dx),
+        onHorizontalDragUpdate: (DragUpdateDetails d) => widget.onDrag(d.delta.dx),
         child: SizedBox(
           width: 6,
           child: Center(
-            child: Container(width: 1, color: palette.border),
+            // 平时就是一条普通分隔线；hover 才亮起来变粗，提示“这里能拖”
+            child: AnimatedContainer(
+              duration: kJoTapMs,
+              curve: Curves.easeOut,
+              width: _hover ? 2 : 1,
+              color: _hover ? p.accent : p.border,
+            ),
           ),
         ),
       ),
@@ -957,16 +1074,17 @@ class _StepCard extends StatelessWidget {
     final JoPalette p = palette;
     final bool compact = !focused && !selected;
     final Color whoColor = event.isNarration ? p.accent : p.text;
-    return GestureDetector(
+    return JoTap(
       onTap: onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Container(
+      builder: (BuildContext context, bool hover, bool down) {
+        return AnimatedContainer(
+          duration: kJoTapMs,
+          curve: Curves.easeOut,
           padding: EdgeInsets.all(compact ? JoSpace.s3 : JoSpace.s4),
           decoration: BoxDecoration(
             color: event.isNarration
-                ? p.accent.withValues(alpha: 0.06)
-                : p.surface,
+                ? p.accent.withValues(alpha: hover ? 0.11 : 0.06)
+                : (hover ? p.surface.withValues(alpha: 0.92) : p.surface),
             border: JoShape.border(
               selected
                   ? p.accent
@@ -1016,7 +1134,200 @@ class _StepCard extends StatelessWidget {
               ),
             ],
           ),
+        );
+      },
+    );
+  }
+}
+
+// ————————————————————————————— 发言框上方的工具栏
+
+/// 发言框上方那一条：模型选择 + 插入媒体 / 文件 / 拍照 / 联网搜索。
+///
+/// 现在**只有 UI**：只有“模型选择”能真的在已配置的服务商里挑一个（存内存），
+/// 其余四个按钮只做了 hover / 按下，点了还不做事。
+class _ComposeBar extends StatelessWidget {
+  const _ComposeBar({
+    required this.palette,
+    required this.model,
+    required this.onPickModel,
+  });
+
+  final JoPalette palette;
+  final String? model;
+  final VoidCallback onPickModel;
+
+  @override
+  Widget build(BuildContext context) {
+    final JoPalette p = palette;
+    return Container(
+      padding: const EdgeInsets.symmetric(
+        horizontal: JoSpace.s4,
+        vertical: JoSpace.s1 + 2,
+      ),
+      decoration: BoxDecoration(border: Border(top: JoShape.side(p.border))),
+      child: Row(
+        children: <Widget>[
+          JoButton(
+            text: '模型 · ${model ?? '未选择'}',
+            onTap: onPickModel,
+            color: p.accent,
+          ),
+          const SizedBox(width: JoSpace.s2),
+          Text(
+            '（还没接入）',
+            style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
+          ),
+          const Spacer(),
+          for (final String label in const <String>[
+            '插入媒体',
+            '插入文件',
+            '拍照',
+            '联网搜索',
+          ])
+            JoButton(text: label, onTap: () {}),
+        ],
+      ),
+    );
+  }
+}
+
+/// 挑一个模型。只列“已启用的服务商”下面“启用着的模型”。
+class _ModelPickerDialog extends StatelessWidget {
+  const _ModelPickerDialog({required this.groups, required this.current});
+
+  final List<({String provider, List<String> models})> groups;
+  final String? current;
+
+  @override
+  Widget build(BuildContext context) {
+    final JoPalette p = JoTheme.of(context);
+    final Size mq = MediaQuery.of(context).size;
+    final double h = (mq.height - 120).clamp(220.0, 520.0);
+
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: 460,
+        height: h,
+        decoration: BoxDecoration(
+          color: p.bg,
+          border: JoShape.border(p.border),
+          borderRadius: JoShape.br,
         ),
+        child: Column(
+          children: <Widget>[
+            Container(
+              padding: const EdgeInsets.fromLTRB(
+                JoSpace.s4,
+                JoSpace.s3,
+                JoSpace.s4,
+                JoSpace.s3,
+              ),
+              decoration:
+                  BoxDecoration(border: Border(bottom: JoShape.side(p.border))),
+              child: Row(
+                children: <Widget>[
+                  Text(
+                    '选择模型',
+                    style: JoFonts.ui.copyWith(
+                      fontSize: 15,
+                      fontWeight: FontWeight.w700,
+                      color: p.text,
+                    ),
+                  ),
+                  const Spacer(),
+                  Text(
+                    '${groups.length} 个服务商',
+                    style: JoFonts.meta.copyWith(color: p.secondary),
+                  ),
+                  const SizedBox(width: JoSpace.s3),
+                  JoButton(
+                    text: '×',
+                    onTap: () => Navigator.of(context).pop(),
+                  ),
+                ],
+              ),
+            ),
+            Expanded(
+              child: groups.isEmpty
+                  ? Center(
+                      child: Text(
+                        '还没有配置服务商\n先去 设置 → 服务商 加一个',
+                        textAlign: TextAlign.center,
+                        style: JoFonts.meta
+                            .copyWith(color: p.secondary, height: 1.8),
+                      ),
+                    )
+                  : ListView(
+                      padding: const EdgeInsets.all(JoSpace.s3),
+                      children: <Widget>[
+                        for (final ({String provider, List<String> models}) g
+                            in groups) ...<Widget>[
+                          Padding(
+                            padding: const EdgeInsets.fromLTRB(
+                              JoSpace.s3,
+                              JoSpace.s2,
+                              JoSpace.s3,
+                              JoSpace.s1,
+                            ),
+                            child: Text(
+                              '▾ ${g.provider}',
+                              style:
+                                  JoFonts.meta.copyWith(color: p.secondary),
+                            ),
+                          ),
+                          for (final String id in g.models)
+                            _modelRow(context, p, id),
+                        ],
+                      ],
+                    ),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
+
+  Widget _modelRow(BuildContext context, JoPalette p, String id) {
+    final bool on = id == current;
+    return Padding(
+      padding: const EdgeInsets.only(bottom: JoSpace.s1),
+      child: JoTap(
+        onTap: () => Navigator.of(context).pop(id),
+        opaque: false,
+        builder: (BuildContext context, bool hover, bool down) {
+          return AnimatedContainer(
+            duration: kJoTapMs,
+            curve: Curves.easeOut,
+            padding: const EdgeInsets.symmetric(
+              horizontal: JoSpace.s3,
+              vertical: JoSpace.s2,
+            ),
+            decoration: BoxDecoration(
+              color: on
+                  ? p.surface
+                  : (hover ? p.surface.withValues(alpha: 0.5) : Colors.transparent),
+              border: JoShape.border(on || hover ? p.accent : Colors.transparent),
+              borderRadius: JoShape.br,
+            ),
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    id,
+                    overflow: TextOverflow.ellipsis,
+                    style: JoFonts.meta.copyWith(
+                      color: on ? p.accent : p.text,
+                    ),
+                  ),
+                ),
+                if (on)
+                  Text('当前', style: JoFonts.meta.copyWith(color: p.accent, fontSize: 10)),
+              ],
+            ),
+          );
+        },
       ),
     );
   }
@@ -1045,7 +1356,6 @@ class _InputBar extends StatelessWidget {
         horizontal: JoSpace.s4,
         vertical: JoSpace.s3,
       ),
-      decoration: BoxDecoration(border: Border(top: JoShape.side(p.border))),
       child: Row(
         children: <Widget>[
           Text('>', style: JoFonts.meta.copyWith(color: p.accent)),

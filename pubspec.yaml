@@ -15,6 +15,7 @@ dependencies:
   url_launcher: ^6.3.2
   package_info_plus: ^9.0.0
   shared_preferences: ^2.3.0
+  http: ^1.2.0
 
 dev_dependencies:
   flutter_test:
@@ -25,13 +26,16 @@ flutter:
   uses-material-design: true
   assets:
     - assets/licenses/SourceHanSans-OFL-1.1.txt
+    - LICENSE
+    - NOTICE
   fonts:
-    - family: SourceHanSansSC
+    - family: NotoSansSC
       fonts:
-        - asset: assets/fonts/SourceHanSansSC-Regular.otf
-        - asset: assets/fonts/SourceHanSansSC-Medium.otf
+        - asset: assets/fonts/NotoSansSC-VF.ttf
+          weight: 400
+        - asset: assets/fonts/NotoSansSC-VF.ttf
           weight: 500
-        - asset: assets/fonts/SourceHanSansSC-Bold.otf
+        - asset: assets/fonts/NotoSansSC-VF.ttf
           weight: 700
     - family: NotoSerifSC
       fonts:

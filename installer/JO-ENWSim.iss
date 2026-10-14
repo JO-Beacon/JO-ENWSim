@@ -24,6 +24,8 @@ DefaultGroupName={#MyAppName}
 UsePreviousAppDir=no
 UninstallDisplayIcon={app}\{#MyAppExeName}
 SetupIconFile=..\windows\runner\resources\app_icon.ico
+; 安装时展示许可（Apache-2.0 要求分发时带上许可）
+LicenseFile=..\LICENSE
 OutputDir=..\dist
 OutputBaseFilename=JO-ENWSim-Setup-{#MyAppFullVersion}
 Compression=lzma2
@@ -38,6 +40,8 @@ Name: "chinesesimp"; MessagesFile: "compiler:Languages\ChineseSimplified.isl"
 
 [Files]
 Source: "..\build\windows\x64\runner\Release\*"; DestDir: "{app}"; Flags: ignoreversion recursesubdirs createallsubdirs
+Source: "..\LICENSE"; DestDir: "{app}"; Flags: ignoreversion
+Source: "..\NOTICE"; DestDir: "{app}"; Flags: ignoreversion
 
 [Tasks]
 Name: "startmenu"; Description: "创建开始菜单项"; GroupDescription: "快捷方式："

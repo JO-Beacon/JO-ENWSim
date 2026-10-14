@@ -2,8 +2,10 @@ import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../model/provider.dart';
 import '../theme/tokens.dart';
 import 'common.dart';
+import 'provider_panel.dart';
 
 /// 设置：左边分类列表，右边内容。
 class SettingsPage extends StatefulWidget {
@@ -11,11 +13,15 @@ class SettingsPage extends StatefulWidget {
     super.key,
     required this.settings,
     required this.onChanged,
+    required this.providers,
+    required this.onProvidersChanged,
     required this.onBack,
   });
 
   final JoSettings settings;
   final ValueChanged<JoSettings> onChanged;
+  final List<Provider> providers;
+  final ValueChanged<List<Provider>> onProvidersChanged;
   final VoidCallback onBack;
 
   @override
@@ -79,7 +85,31 @@ class _SettingsPageState extends State<SettingsPage> {
               children: <Widget>[
                 SizedBox(width: 200, child: _list(p)),
                 Container(width: 1, color: p.border),
-                Expanded(child: _body(p)),
+                Expanded(
+                  child: AnimatedSwitcher(
+                    duration: const Duration(milliseconds: 160),
+                    // 必须给紧约束：默认那个松散 Stack 会把短内容居中。
+                    layoutBuilder:
+                        (Widget? current, List<Widget> previous) => Stack(
+                      fit: StackFit.expand,
+                      children: <Widget>[
+                        ...previous,
+                        ?current,
+                      ],
+                    ),
+                    transitionBuilder: (Widget child, Animation<double> a) =>
+                        FadeTransition(opacity: a, child: child),
+                    child: KeyedSubtree(
+                      key: ValueKey<int>(_tab),
+                      child: _tab == 2
+                          ? ProviderPanel(
+                              providers: widget.providers,
+                              onChanged: widget.onProvidersChanged,
+                            )
+                          : _body(p),
+                    ),
+                  ),
+                ),
               ],
             ),
           ),
@@ -98,30 +128,35 @@ class _SettingsPageState extends State<SettingsPage> {
         for (int i = 0; i < _tabs.length; i++)
           Padding(
             padding: const EdgeInsets.only(bottom: JoSpace.s1),
-            child: GestureDetector(
+            child: JoTap(
               onTap: () => setState(() => _tab = i),
-              child: MouseRegion(
-                cursor: SystemMouseCursors.click,
-                child: Container(
+              opaque: false,
+              builder: (BuildContext context, bool hover, bool down) {
+                final bool on = _tab == i;
+                return AnimatedContainer(
+                  duration: kJoTapMs,
+                  curve: Curves.easeOut,
                   padding: const EdgeInsets.symmetric(
                     horizontal: JoSpace.s3,
                     vertical: JoSpace.s3,
                   ),
                   decoration: BoxDecoration(
-                    color: _tab == i ? p.surface : Colors.transparent,
-                    border: JoShape.border(_tab == i ? p.accent : p.border),
+                    color: on
+                        ? p.surface
+                        : (hover ? p.surface.withValues(alpha: 0.5) : Colors.transparent),
+                    border: JoShape.border(on || hover ? p.accent : p.border),
                     borderRadius: JoShape.br,
                   ),
                   child: Text(
                     _tabs[i],
                     style: JoFonts.ui.copyWith(
                       fontSize: 13,
-                      color: _tab == i ? p.accent : p.text,
-                      fontWeight: _tab == i ? FontWeight.w700 : FontWeight.w400,
+                      color: on ? p.accent : p.text,
+                      fontWeight: on ? FontWeight.w700 : FontWeight.w400,
                     ),
                   ),
-                ),
-              ),
+                );
+              },
             ),
           ),
       ],
@@ -138,6 +173,7 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
+  /// 页签下标：0 语言 / 1 外观 / 2 服务商（外面板接管，不进这里）/ 3 引擎 / 4 数据 / 5 关于
   List<Widget> _content(JoPalette p) {
     switch (_tab) {
       case 0: // 语言
@@ -223,26 +259,6 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
         ];
-      case 2: // 服务商
-        return <Widget>[
-          JoSection(
-            title: '模型服务商（还没接入）',
-            children: <Widget>[
-              _pending('服务商', 'OpenAI / Anthropic / DeepSeek / 自定义'),
-              _pending('接口地址', 'Base URL'),
-              _pending('API Key', '只存在本机'),
-            ],
-          ),
-          const SizedBox(height: JoSpace.s5),
-          JoSection(
-            title: '各步用哪个模型',
-            children: <Widget>[
-              _pending('A · 上帝', '跑 A₀ – A₄'),
-              _pending('B₁ · 感知', '每个角色一份'),
-              _pending('B₂ · 行为', 'NPC 用 AI，玩家角色由玩家'),
-            ],
-          ),
-        ];
       case 3: // 引擎
         return <Widget>[
           Text(
@@ -303,9 +319,17 @@ class _SettingsPageState extends State<SettingsPage> {
       JoSection(
         title: '许可',
         children: <Widget>[
-          _kv(p, '本应用', '许可待定'),
+          _kv(p, '本应用', 'Apache-2.0 · © 2026 JO-Beacon'),
           _kv(p, '字体', '思源黑体 / 思源宋体（SIL OFL 1.1）'),
-          _kv(p, '开源依赖', 'Flutter 及 pub 依赖（见 NOTICES）'),
+          JoField(
+            label: '开源依赖',
+            hint: 'Flutter / Dart 及 pub 依赖',
+            child: JoButton(
+              text: '查看开源许可 →',
+              onTap: _openLicenses,
+              color: p.accent,
+            ),
+          ),
         ],
       ),
       const SizedBox(height: JoSpace.s5),
@@ -387,6 +411,15 @@ class _SettingsPageState extends State<SettingsPage> {
     if (uri != null) {
       await launchUrl(uri, mode: LaunchMode.externalApplication);
     }
+  }
+
+  /// Flutter 会把所有 pub 依赖的许可汇总进应用里，这里直接展示那份。
+  void _openLicenses() {
+    showLicensePage(
+      context: context,
+      applicationName: 'JO-ENWSim',
+      applicationLegalese: 'Apache-2.0 · © 2026 JO-Beacon',
+    );
   }
 
   Widget _prompt(

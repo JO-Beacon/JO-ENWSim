@@ -33,6 +33,22 @@ class JoPalette {
     isDark: true,
   );
 
+  /// 明暗过渡用：逐字段插值。
+  /// isDark 不做插值，过中点时翻过来（它只当开关用）。
+  static JoPalette lerp(JoPalette a, JoPalette b, double t) {
+    if (t <= 0) return a;
+    if (t >= 1) return b;
+    return JoPalette(
+      bg: Color.lerp(a.bg, b.bg, t)!,
+      surface: Color.lerp(a.surface, b.surface, t)!,
+      border: Color.lerp(a.border, b.border, t)!,
+      text: Color.lerp(a.text, b.text, t)!,
+      secondary: Color.lerp(a.secondary, b.secondary, t)!,
+      accent: Color.lerp(a.accent, b.accent, t)!,
+      isDark: t < 0.5 ? a.isDark : b.isDark,
+    );
+  }
+
   /// 明 · 纸
   static const JoPalette light = JoPalette(
     bg: Color(0xFFF5F2EC),
@@ -47,7 +63,7 @@ class JoPalette {
 
 /// 字体族。
 class JoFonts {
-  static const String sans = 'SourceHanSansSC';
+  static const String sans = 'NotoSansSC';
   static const String serif = 'NotoSerifSC';
   static const String mono = 'monospace';
 
@@ -129,11 +145,17 @@ class JoSettings {
 /// 把令牌塞进 Theme，供子组件读取。
 @immutable
 class JoTheme extends InheritedWidget {
-  const JoTheme({super.key, required this.settings, required super.child});
+  const JoTheme({
+    super.key,
+    required this.settings,
+    required this.palette,
+    required super.child,
+  });
 
   final JoSettings settings;
 
-  JoPalette get palette => settings.palette;
+  /// 当前**实际**用的调色板。明暗切换时这里是插值中的值，不是目标值。
+  final JoPalette palette;
 
   static JoTheme _scope(BuildContext context) {
     final JoTheme? t = context.dependOnInheritedWidgetOfExactType<JoTheme>();
@@ -146,5 +168,6 @@ class JoTheme extends InheritedWidget {
   static JoSettings settingsOf(BuildContext context) => _scope(context).settings;
 
   @override
-  bool updateShouldNotify(JoTheme oldWidget) => settings != oldWidget.settings;
+  bool updateShouldNotify(JoTheme oldWidget) =>
+      settings != oldWidget.settings || palette != oldWidget.palette;
 }

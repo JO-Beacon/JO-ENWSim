@@ -2,6 +2,56 @@ import 'package:flutter/material.dart';
 
 import '../theme/tokens.dart';
 
+/// 可点区域的动效基元：hover / 按下。builder 拿到状态自己画。
+/// 极简风格用得很克制：120ms、只改底色和描边。
+class JoTap extends StatefulWidget {
+  const JoTap({
+    super.key,
+    required this.onTap,
+    required this.builder,
+    this.cursor = SystemMouseCursors.click,
+    this.opaque = true,
+  });
+
+  final VoidCallback onTap;
+  final Widget Function(BuildContext context, bool hover, bool down) builder;
+  final MouseCursor cursor;
+  final bool opaque;
+
+  @override
+  State<JoTap> createState() => _JoTapState();
+}
+
+class _JoTapState extends State<JoTap> {
+  bool _hover = false;
+  bool _down = false;
+
+  @override
+  Widget build(BuildContext context) {
+    return MouseRegion(
+      cursor: widget.cursor,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() {
+        _hover = false;
+        _down = false;
+      }),
+      child: GestureDetector(
+        behavior: widget.opaque
+            ? HitTestBehavior.opaque
+            : HitTestBehavior.deferToChild,
+        onTapDown: (_) => setState(() => _down = true),
+        onTapUp: (_) => setState(() => _down = false),
+        onTapCancel: () => setState(() => _down = false),
+        onTap: widget.onTap,
+        child: widget.builder(context, _hover, _down),
+      ),
+    );
+  }
+}
+
+/// 动效时长（统一一处，好调）。
+const Duration kJoTapMs = Duration(milliseconds: 120);
+
 /// 可点文字（细线边框可选）。
 class JoButton extends StatelessWidget {
   const JoButton({
@@ -20,24 +70,36 @@ class JoButton extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final JoPalette p = JoTheme.of(context);
-    return GestureDetector(
+    final Color base = color ?? p.secondary;
+    return JoTap(
       onTap: onTap,
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Container(
+      opaque: false,
+      builder: (BuildContext context, bool hover, bool down) {
+        final double a = down ? 0.20 : (hover ? 0.09 : 0.0);
+        return AnimatedContainer(
+          duration: kJoTapMs,
+          curve: Curves.easeOut,
           padding: const EdgeInsets.symmetric(
             horizontal: JoSpace.s3,
             vertical: JoSpace.s1 + 2,
           ),
-          decoration: bordered
-              ? BoxDecoration(
-                  border: JoShape.border(p.border),
-                  borderRadius: JoShape.br,
-                )
-              : null,
-          child: Text(text, style: JoFonts.meta.copyWith(color: color ?? p.secondary)),
-        ),
-      ),
+          decoration: BoxDecoration(
+            color: a == 0 ? Colors.transparent : base.withValues(alpha: a),
+            border: bordered
+                ? JoShape.border(hover || down ? base : p.border)
+                : null,
+            borderRadius: JoShape.br,
+          ),
+          child: AnimatedDefaultTextStyle(
+            duration: kJoTapMs,
+            curve: Curves.easeOut,
+            style: JoFonts.meta.copyWith(
+              color: hover || down ? (color ?? p.text) : base,
+            ),
+            child: Text(text),
+          ),
+        );
+      },
     );
   }
 }
@@ -71,26 +133,30 @@ class JoSegment<T> extends StatelessWidget {
 
   Widget _cell(BuildContext context, JoPalette p, ({String label, T value}) o) {
     final bool on = o.value == value;
-    return GestureDetector(
+    return JoTap(
       onTap: () => onChanged(o.value),
-      child: MouseRegion(
-        cursor: SystemMouseCursors.click,
-        child: Container(
+      opaque: false,
+      builder: (BuildContext context, bool hover, bool down) {
+        return AnimatedContainer(
+          duration: kJoTapMs,
+          curve: Curves.easeOut,
           padding: const EdgeInsets.symmetric(
             horizontal: JoSpace.s3,
             vertical: JoSpace.s1 + 2,
           ),
           decoration: BoxDecoration(
-            color: on ? p.surface : Colors.transparent,
-            border: JoShape.border(on ? p.accent : p.border),
+            color: on ? p.surface : (hover ? p.surface.withValues(alpha: 0.6) : Colors.transparent),
+            border: JoShape.border(on || hover ? p.accent : p.border),
             borderRadius: JoShape.br,
           ),
-          child: Text(
-            o.label,
+          child: AnimatedDefaultTextStyle(
+            duration: kJoTapMs,
+            curve: Curves.easeOut,
             style: JoFonts.meta.copyWith(color: on ? p.accent : p.secondary),
+            child: Text(o.label),
           ),
-        ),
-      ),
+        );
+      },
     );
   }
 }
@@ -219,6 +285,130 @@ class JoPageHeader extends StatelessWidget {
           const Spacer(),
           ?trailing,
         ],
+      ),
+    );
+  }
+}
+
+/// 文本输入框（自带状态；父级换 key 就能重设初值）。
+class JoInput extends StatefulWidget {
+  const JoInput({
+    super.key,
+    required this.initial,
+    required this.onChanged,
+    this.hint,
+    this.compact = false,
+  });
+
+  final String initial;
+  final ValueChanged<String> onChanged;
+  final String? hint;
+  final bool compact;
+
+  @override
+  State<JoInput> createState() => _JoInputState();
+}
+
+class _JoInputState extends State<JoInput> {
+  late final TextEditingController _c;
+  late String _sent;
+
+  @override
+  void initState() {
+    super.initState();
+    _c = TextEditingController(text: widget.initial);
+    // 必须在 initState 里定死。不能用 late 懒初始化：懒初始化第一次访问
+    // 发生在 didUpdateWidget 里，那时 widget.initial 已经是新值了，
+    // 于是永远判不出“外部改过”。
+    _sent = widget.initial;
+  }
+
+  @override
+  void didUpdateWidget(JoInput old) {
+    super.didUpdateWidget(old);
+    // 外部把值改了（比如重命名分组）→ 跟着变；自己打的就不动，免得光标乱跳。
+    if (widget.initial != _sent) {
+      _sent = widget.initial;
+      _c.text = widget.initial;
+      _c.selection = TextSelection.collapsed(offset: _c.text.length);
+    }
+  }
+
+  void _onChanged(String v) {
+    _sent = v;
+    widget.onChanged(v);
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final JoPalette p = JoTheme.of(context);
+    final double size = widget.compact ? 12 : 13;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: JoSpace.s3, vertical: 4),
+      decoration: BoxDecoration(
+        color: p.surface,
+        border: JoShape.border(p.border),
+        borderRadius: JoShape.br,
+      ),
+      child: TextField(
+        controller: _c,
+        onChanged: _onChanged,
+        style: JoFonts.ui.copyWith(fontSize: size, color: p.text),
+        cursorColor: p.accent,
+        decoration: InputDecoration(
+          isDense: true,
+          border: InputBorder.none,
+          hintText: widget.hint,
+          hintStyle: JoFonts.ui.copyWith(fontSize: size, color: p.secondary),
+        ),
+      ),
+    );
+  }
+}
+
+/// 开关：文字样式（`启用` / `禁用`），不用圆点滑块。
+class JoToggle extends StatelessWidget {
+  const JoToggle({
+    super.key,
+    required this.on,
+    required this.onChanged,
+    this.onLabel = '启用',
+    this.offLabel = '禁用',
+  });
+
+  final bool on;
+  final ValueChanged<bool> onChanged;
+  final String onLabel;
+  final String offLabel;
+
+  @override
+  Widget build(BuildContext context) {
+    final JoPalette p = JoTheme.of(context);
+    return GestureDetector(
+      onTap: () => onChanged(!on),
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: JoSpace.s3,
+            vertical: JoSpace.s1 + 2,
+          ),
+          decoration: BoxDecoration(
+            color: on ? p.surface : Colors.transparent,
+            border: JoShape.border(on ? p.accent : p.border),
+            borderRadius: JoShape.br,
+          ),
+          child: Text(
+            on ? onLabel : offLabel,
+            style: JoFonts.meta.copyWith(color: on ? p.accent : p.secondary),
+          ),
+        ),
       ),
     );
   }

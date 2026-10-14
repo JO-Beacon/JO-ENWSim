@@ -43,4 +43,7 @@ JO-ENWSim 是一个涌现叙事模拟器，一个多 Agent 的因果沙盒。玩
 
 ## 许可
 
-待定。
+[Apache License 2.0](./LICENSE) · Copyright 2026 JO-Beacon
+
+第三方组件（Flutter / Dart / 思源黑体 / 思源宋体）见 [NOTICE](./NOTICE)。
+
