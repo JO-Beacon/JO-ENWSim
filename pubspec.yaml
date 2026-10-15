@@ -9,14 +9,12 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  cupertino_icons: ^1.0.8
   flutter_markdown_plus: ^1.0.7
   markdown: ^7.3.0
   url_launcher: ^6.3.2
   package_info_plus: ^9.0.0
   shared_preferences: ^2.3.0
   http: ^1.2.0
-
 dev_dependencies:
   flutter_test:
     sdk: flutter
@@ -26,9 +24,16 @@ flutter:
   uses-material-design: true
   assets:
     - assets/licenses/SourceHanSans-OFL-1.1.txt
+    - assets/licenses/RemixIcon-License-1.0.txt
     - LICENSE
     - NOTICE
   fonts:
+    # Remix Icon：我们自己的常量在 lib/ui/icons.dart，
+    # 字体是官方仓库 Remix-Design/remixicon 的原件。
+    # 许可：Remix Icon License v1.0 — https://remixicon.com
+    - family: RemixIcon
+      fonts:
+        - asset: assets/fonts/remixicon.ttf
     - family: NotoSansSC
       fonts:
         - asset: assets/fonts/NotoSansSC-VF.ttf

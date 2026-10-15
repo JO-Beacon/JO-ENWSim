@@ -12,10 +12,18 @@ class ProviderPanel extends StatefulWidget {
     super.key,
     required this.providers,
     required this.onChanged,
+    this.presets = kProviderPresets,
+    this.note,
   });
 
   final List<Provider> providers;
   final ValueChanged<List<Provider>> onChanged;
+
+  /// “添加”弹窗里给哪一套预设（模型 / 搜索 / 语音各不相同）。
+  final List<ProviderPreset> presets;
+
+  /// 存档读不出来时的提示语。如实显示，不藏也不假装没有。
+  final String? note;
 
   @override
   State<ProviderPanel> createState() => _ProviderPanelState();
@@ -81,7 +89,7 @@ class _ProviderPanelState extends State<ProviderPanel> {
   }
 
   Future<void> _add() async {
-    final Provider? p = await showAddProviderDialog(context);
+    final Provider? p = await showAddProviderDialog(context, presets: widget.presets);
     if (p == null || !mounted) return;
     // 重名就自动加序号：第二个 DeepSeek 叫 “DeepSeek 2”。
     final Set<String> names = <String>{
@@ -108,12 +116,39 @@ class _ProviderPanelState extends State<ProviderPanel> {
     return Row(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        SizedBox(width: 280, child: _left(p)),
+        SizedBox(
+          width: 280,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              if (widget.note != null) _loadNote(p, widget.note!),
+              Expanded(child: _left(p)),
+            ],
+          ),
+        ),
         Container(width: 1, color: p.border),
         Expanded(child: _selected == null ? _empty(p) : _right(p, _selected!)),
       ],
     );
   }
+
+  /// 存档有问题时的提示。只说事实，不做任何补救动作。
+  Widget _loadNote(JoPalette p, String text) => Padding(
+        padding: const EdgeInsets.fromLTRB(
+          JoSpace.s3,
+          JoSpace.s3,
+          JoSpace.s3,
+          0,
+        ),
+        child: Text(
+          text,
+          style: JoFonts.meta.copyWith(
+            color: p.accent,
+            fontSize: 10,
+            height: 1.6,
+          ),
+        ),
+      );
 
   Widget _empty(JoPalette p) => Center(
         child: Text(
@@ -430,7 +465,13 @@ class _ProviderPanelState extends State<ProviderPanel> {
                 ..._deepseek(p, x),
               ],
               const SizedBox(height: JoSpace.s6),
-              _models(p, x),
+              if (x.kind == ServiceKind.model)
+                _models(p, x)
+              else if (x.kind == ServiceKind.voice)
+                // 音色：定义在服务里，引用在角色上。
+                _voices(p),
+              // 搜索服务只要把服务本身配好就行（全局一层，没有引用层级），
+              // 所以底下不再挂任何清单。
               const SizedBox(height: JoSpace.s6),
               Align(
                 alignment: Alignment.centerLeft,
@@ -446,6 +487,21 @@ class _ProviderPanelState extends State<ProviderPanel> {
       ],
     );
   }
+
+  /// 音色清单：定义在服务里（有哪些音色），引用在角色上（谁用哪个）。
+  ///
+  /// 表头先摆出来，条目结构与属性（语言 / 性别 / 风格）等定了再填。
+  Widget _voices(JoPalette p) => Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          _label(p, '音色 0'),
+          Text(
+            '音色定义在服务里，角色那边只存“用哪个”。'
+            '条目属性（语言 / 性别 / 风格之类）还没定，定完就照模型清单的样子做。',
+            style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+          ),
+        ],
+      );
 
   /// DeepSeek 专属开关。
   ///
@@ -480,11 +536,12 @@ class _ProviderPanelState extends State<ProviderPanel> {
         _note(p, '峰时（北京时间 09:00–12:00、14:00–18:00 的工作日）是谷时的两倍'),
       ];
 
-  /// 模型行点开后展开的参数。
+  /// 模型行点开后展开的内容。
   ///
-  /// 这些是**模型级**的：同一个服务商下面，不同模型能力不一样。
+  /// **只显示能力声明**——那是客观事实，不是给用户调的东西。
+  /// 采样策略、思考档位这类「选择」不在这儿（它们跟着角色，进聊天栏）。
   Widget _modelParams(JoPalette p, Provider x, ModelRef m) {
-    final bool ds = x.protocol.isDeepSeek;
+    final ModelCaps? c = m.caps;
     return Container(
       margin: const EdgeInsets.only(top: JoSpace.s1),
       padding: const EdgeInsets.all(JoSpace.s3),
@@ -493,110 +550,54 @@ class _ProviderPanelState extends State<ProviderPanel> {
         border: JoShape.border(p.border),
         borderRadius: JoShape.br,
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          if (ds) ...<Widget>[
-            _label(p, '思考模式'),
-            JoSegment<ThinkingMode>(
-              options: <({String label, ThinkingMode value})>[
-                for (final ThinkingMode v in ThinkingMode.values)
-                  (label: v.label, value: v),
+      child: c == null
+          ? Text(
+              '用户自己加的模型，我们不知道它是什么，所以没有能力声明。',
+              style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+            )
+          : Column(
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                _cap(p, '上下文窗口', c.contextWindow),
+                _cap(p, '最大输出上限', c.maxOutput),
+                _cap(p, '输入模态', c.inputModalities.join(' / ')),
+                _cap(p, '输出模态', c.outputModalities.join(' / ')),
+                _cap(
+                  p,
+                  '能力',
+                  <String>[
+                    if (c.tools) '工具',
+                    if (c.reasoning) '推理',
+                    if (c.vision) '视觉',
+                  ].join(' · '),
+                ),
               ],
-              value: m.thinking,
-              onChanged: (ThinkingMode v) =>
-                  _replaceModel(x, m, m.copyWith(thinking: v)),
             ),
-            const SizedBox(height: JoSpace.s4),
-            _label(p, '思考投入'),
-            _chips<ReasoningEffort>(
-              p,
-              <({String label, ReasoningEffort value})>[
-                for (final ReasoningEffort v in ReasoningEffort.values)
-                  (label: v.label, value: v),
-              ],
-              m.effort,
-              (ReasoningEffort v) =>
-                  _replaceModel(x, m, m.copyWith(effort: v)),
-            ),
-            const SizedBox(height: JoSpace.s4),
-          ],
-          _label(p, '最大输出 tokens'),
-          JoInput(
-            initial: m.maxTokens,
-            hint: '留空 = 用服务端默认',
-            onChanged: (String v) =>
-                _replaceModel(x, m, m.copyWith(maxTokens: v)),
-          ),
-          const SizedBox(height: JoSpace.s4),
-          _label(p, '请求 JSON 输出'),
-          JoSegment<bool>(
-            options: const <({String label, bool value})>[
-              (label: '否', value: false),
-              (label: '是', value: true),
-            ],
-            value: m.jsonOutput,
-            onChanged: (bool v) =>
-                _replaceModel(x, m, m.copyWith(jsonOutput: v)),
-          ),
-          if (m.jsonOutput)
-            _note(p, '要求提示词里出现 json 这个词并给出格式示例；官方说明该模式偶发返回空内容'),
-          if (ds)
-            _note(
-              p,
-              '思考模式下 temperature / presence_penalty / frequency_penalty 会被忽略，'
-              '不报错但无效；top_p 只在思考模式生效，低于 0.95 按 0.95 算，'
-              '非思考模式固定为 1.0',
-            ),
-        ],
-      ),
     );
   }
 
-  /// 一排挤不下时的可换行选项。
-  Widget _chips<T>(
-    JoPalette p,
-    List<({String label, T value})> options,
-    T value,
-    ValueChanged<T> onChanged,
-  ) {
-    return Wrap(
-      spacing: JoSpace.s2,
-      runSpacing: JoSpace.s2,
-      children: <Widget>[
-        for (final ({String label, T value}) o in options)
-          JoTap(
-            onTap: () => onChanged(o.value),
-            opaque: false,
-            builder: (BuildContext context, bool hover, bool down) {
-              final bool on = o.value == value;
-              return AnimatedContainer(
-                duration: kJoTapMs,
-                curve: Curves.easeOut,
-                padding: const EdgeInsets.symmetric(
-                  horizontal: JoSpace.s3,
-                  vertical: JoSpace.s2,
-                ),
-                decoration: BoxDecoration(
-                  color: on ? p.surface : Colors.transparent,
-                  border: JoShape.border(on || hover ? p.accent : p.border),
-                  borderRadius: JoShape.br,
-                ),
-                child: AnimatedDefaultTextStyle(
-                  duration: kJoTapMs,
-                  curve: Curves.easeOut,
-                  style: JoFonts.meta.copyWith(
-                    color: on ? p.accent : p.secondary,
-                    fontSize: 10,
-                  ),
-                  child: Text(o.label),
-                ),
-              );
-            },
-          ),
-      ],
-    );
-  }
+  /// 声明里的一行：左边名字，右边值。
+  Widget _cap(JoPalette p, String name, String value) => Padding(
+        padding: const EdgeInsets.only(bottom: 2),
+        child: Row(
+          crossAxisAlignment: CrossAxisAlignment.start,
+          children: <Widget>[
+            SizedBox(
+              width: 80,
+              child: Text(
+                name,
+                style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
+              ),
+            ),
+            Expanded(
+              child: Text(
+                value.trim().isEmpty ? '—' : value,
+                style: JoFonts.meta.copyWith(color: p.text, fontSize: 10),
+              ),
+            ),
+          ],
+        ),
+      );
 
   Widget _note(JoPalette p, String text) => Padding(
         padding: const EdgeInsets.only(top: JoSpace.s2),
@@ -709,7 +710,7 @@ class _ProviderPanelState extends State<ProviderPanel> {
       children: <Widget>[
         Row(
           children: <Widget>[
-            _label(p, '模型 ${x.models.length}'),
+            _label(p, '一共有 ${x.models.length} 个模型'),
             const Spacer(),
             JoButton(
               text: '＋ 添加模型',
@@ -804,7 +805,10 @@ class _ProviderPanelState extends State<ProviderPanel> {
                         ),
                         const SizedBox(width: JoSpace.s2),
                         Expanded(
-                          child: m.id.trim().isEmpty
+                          // 展开时保留输入框：不能只在 id 为空时显示，
+                          // 否则敲下第一个字符，这一行立刻从输入框变成文本，
+                          // 后面就再也打不进去了。
+                          child: (open || m.id.trim().isEmpty)
                               ? JoInput(
                                   initial: m.id,
                                   hint: '模型 id，比如 deepseek-chat',

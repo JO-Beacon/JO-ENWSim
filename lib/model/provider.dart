@@ -9,16 +9,29 @@ enum Wire { openai, anthropic, google }
 /// 接口协议。
 enum Protocol {
   openai('OpenAI', 'https://api.openai.com/v1', '/chat/completions',
-      Wire.openai),
+      Wire.openai, '/models'),
+  // Google 的列表端点形状不一样（带 ?key=），但路径仍是 /models。
   google('Google', 'https://generativelanguage.googleapis.com/v1beta',
-      '/models', Wire.google),
-  claude('Claude', 'https://api.anthropic.com/v1', '/messages', Wire.anthropic),
+      '/models/{model}:generateContent', Wire.google, '/models'),
+  // Anthropic **没有公开的模型列表端点**，所以这里是 null。
+  claude('Claude', 'https://api.anthropic.com/v1', '/messages', Wire.anthropic,
+      null),
   deepseek('DeepSeek', 'https://api.deepseek.com', '/chat/completions',
-      Wire.openai),
+      Wire.openai, '/models'),
+  // DeepSeek 的 Anthropic 格式**不能直接把 /models 接在 /anthropic 后面**；
+  // 正确做法是**剥掉 /anthropic、去主域名**拼 /models —— 也就是 provider_api
+  // 里的 _accountBase 干的事。端点还是主域名那个列表接口。
   deepseekAnthropic('DeepSeek · Anthropic 格式',
-      'https://api.deepseek.com/anthropic', '/messages', Wire.anthropic);
+      'https://api.deepseek.com/anthropic', '/messages', Wire.anthropic,
+      '/models'),
+  // 三种“兼容”只保证形状像。列模型这条按 OpenAI 的**约定**试一下是可以的，
+  // 但那是约定、不是承诺——拉不到的时候要说清是“不确知”，别说人家坏了。
+  openaiCompatible('OpenAI 兼容', '', '', Wire.openai, '/models'),
+  anthropicCompatible('Anthropic 兼容', '', '', Wire.anthropic, null),
+  googleCompatible('Google 兼容', '', '', Wire.google, null);
 
-  const Protocol(this.label, this.baseUrl, this.apiPath, this.wire);
+  const Protocol(this.label, this.baseUrl, this.apiPath, this.wire,
+      this.listPath);
 
   final String label;
 
@@ -31,8 +44,20 @@ enum Protocol {
   /// 请求体与鉴权按哪种形状走
   final Wire wire;
 
+  /// 模型列表接口的路径。**null = 这个协议没有列表接口**（别硬拼）。
+  final String? listPath;
+
   /// 是不是 DeepSeek 自家的规矩（思考模式、缓存计费、402 余额不足等）。
   bool get isDeepSeek => this == deepseek || this == deepseekAnthropic;
+
+  /// 是不是**真 OpenAI**（不是“OpenAI 兼容”）。
+  bool get isOpenAi => this == openai;
+
+  /// 我们**知不知道这个协议的规矩**。
+  bool get rulesKnown =>
+      this != openaiCompatible &&
+      this != anthropicCompatible &&
+      this != googleCompatible;
 
   static Protocol byName(String s) => Protocol.values.firstWhere(
         (Protocol p) => p.name == s,
@@ -58,51 +83,184 @@ enum ThinkingMode {
       );
 }
 
-/// 思考投入程度。
-///
-/// 取值只取官方文档里 “Thinking Effort Control” 明写的三个。
-/// 文档另外列过 minimal / medium / xhigh / ultra，那些只是**别名**
-/// （分别映射到 low / high / high / max），没有任何额外效果，故不列出。
-enum ReasoningEffort {
-  auto('跟随服务端'),
-  low('low'),
-  high('high'),
-  max('max');
+/// 一个协议下“思考”长什么样、有哪些可选值。
+class ThinkingSpec {
+  const ThinkingSpec({
+    this.hasMode = false,
+    this.levels = const <String>[],
+    this.hasBudget = false,
+  });
 
-  const ReasoningEffort(this.label);
+  /// 有没有开关（thinking: {type}）。
+  final bool hasMode;
 
-  final String label;
+  /// 等级可选项。空 = 这个协议没有等级这个东西。
+  final List<String> levels;
 
-  /// 发给接口的值；跟随 = null（不传）。
-  String? get wire => this == auto ? null : name;
+  /// 有没有 token 预算。
+  final bool hasBudget;
 
-  static ReasoningEffort byName(String s) =>
-      ReasoningEffort.values.firstWhere(
-        (ReasoningEffort e) => e.name == s,
-        orElse: () => ReasoningEffort.auto,
-      );
+  /// 一样都没有 = 我们不知道这个协议的规矩。
+  bool get isEmpty => !hasMode && levels.isEmpty && !hasBudget;
 }
 
-/// DeepSeek 内置模型。选了 DeepSeek 预设就直接有，不用再点“获取”。
+/// 各家“思考”的规矩。**全部来自官方资料，不是推的**。
+///
+/// 这份是**程序自己的知识**，不是给用户看的设置项——
+/// 界面上不摆“思考”（那是「选择」，归角色那层，进聊天栏）。
+/// 以后引擎发请求时按这个决定该发哪个字段。
+///
+/// - OpenAI：`reasoning_effort` = none/minimal/low/medium/high/xhigh/max
+///   （`openapi.yaml` 的 `components/schemas/ReasoningEffort`）
+/// - DeepSeek：`thinking{type}` + `reasoning_effort` = low/high/max
+///   （官方文档 “Thinking Effort Control” 明写的三个）
+/// - Anthropic：`thinking{type: enabled|disabled, budget_tokens, display?}`
+///   （`anthropic-sdk-python` 的 types/thinking_config_*.py）
+/// - Google：`generationConfig.thinkingConfig` 里**两个字段并存**，
+///   用哪个**看模型代次**（不是看 SDK、也不是看厂商）：
+///     · **Gemini 2.5 系列** → `thinkingBudget`（数字；0 = 关闭，-1 = 自动）
+///     · **Gemini 3 起**     → `thinkingLevel` = MINIMAL/LOW/MEDIUM/HIGH
+///   （js-genai 的 `ThinkingConfig` 两个都有；python-genai 把
+///   `thinking_budget` 标成“将不再支持、设了会报用户错误”——
+///   那是它只盯着新代次，不是两家打架。这条是用户核实的。）
+///   所以这里**两个都摆**：具体用哪个由你按自己的模型代次选。
+ThinkingSpec thinkingSpecOf(Protocol p) {
+  if (p.isDeepSeek) {
+    return const ThinkingSpec(
+      hasMode: true,
+      levels: <String>['low', 'high', 'max'],
+    );
+  }
+  if (p.isOpenAi) {
+    return const ThinkingSpec(
+      levels: <String>[
+        'none',
+        'minimal',
+        'low',
+        'medium',
+        'high',
+        'xhigh',
+        'max',
+      ],
+    );
+  }
+  if (p == Protocol.claude) {
+    // Anthropic 有开关和预算，**没有等级**。
+    return const ThinkingSpec(hasMode: true, hasBudget: true);
+  }
+  if (p == Protocol.google) {
+    // 等级（3 起）与预算（2.5 系列）**两个都摆**，
+    // 用哪个看模型代次——这个只有用户自己知道。
+    return const ThinkingSpec(
+      levels: <String>['MINIMAL', 'LOW', 'MEDIUM', 'HIGH'],
+      hasBudget: true,
+    );
+  }
+  // 兼容 / 自定义：规矩未知，什么都不摆。
+  return const ThinkingSpec();
+}
+
+/// DeepSeek 预设模型。选了 DeepSeek 预设就直接有，不用再点“获取”。
+///
+/// 能力声明抄自 DeepSeek 官方文档的模型与价格表：
+/// 上下文 1M、最大输出 384K、两者都支持工具调用与思考模式、
+/// **视觉只有 flash 支持**（v4-pro 那栏写的是 Not supported）。
 const List<ModelRef> kDeepSeekModels = <ModelRef>[
-  ModelRef(id: 'deepseek-flash', group: 'DeepSeek'),
-  ModelRef(id: 'deepseek-v4-pro', group: 'DeepSeek'),
+  ModelRef(
+    id: 'deepseek-flash',
+    group: 'DeepSeek',
+    caps: ModelCaps(
+      contextWindow: '1M',
+      maxOutput: '384K',
+      inputModalities: <String>['文本', '图片'],
+      outputModalities: <String>['文本'],
+      tools: true,
+      reasoning: true,
+      vision: true,
+    ),
+  ),
+  ModelRef(
+    id: 'deepseek-v4-pro',
+    group: 'DeepSeek',
+    caps: ModelCaps(
+      contextWindow: '1M',
+      maxOutput: '384K',
+      inputModalities: <String>['文本'],
+      outputModalities: <String>['文本'],
+      tools: true,
+      reasoning: true,
+      vision: false,
+    ),
+  ),
 ];
 
-/// 一个模型。
+/// 模型的能力声明。**只有预设模型带这个。**
 ///
-/// 下面这几个是**模型级**设置，不是服务商级的：同一个服务商下面，
-/// 不同模型的能力与默认档位就不一样。
+/// 用户自己加的模型我们不知道它是什么，所以留空（null），界面也就不显示。
+/// 全是客观事实，值抄自厂商官方资料，出处写在各自的地方。
+class ModelCaps {
+  const ModelCaps({
+    this.contextWindow = '',
+    this.maxOutput = '',
+    this.inputModalities = const <String>[],
+    this.outputModalities = const <String>[],
+    this.tools = false,
+    this.reasoning = false,
+    this.vision = false,
+  });
+
+  /// 上下文窗口
+  final String contextWindow;
+
+  /// 最大输出上限
+  final String maxOutput;
+
+  /// 能收什么（文本 / 图片 / 音频）
+  final List<String> inputModalities;
+
+  /// 能出什么
+  final List<String> outputModalities;
+
+  final bool tools;
+  final bool reasoning;
+  final bool vision;
+
+  Map<String, Object?> toJson() => <String, Object?>{
+        'contextWindow': contextWindow,
+        'maxOutput': maxOutput,
+        'inputModalities': inputModalities,
+        'outputModalities': outputModalities,
+        'tools': tools,
+        'reasoning': reasoning,
+        'vision': vision,
+      };
+
+  static ModelCaps fromJson(Map<String, Object?> j) => ModelCaps(
+        contextWindow: '${j['contextWindow'] ?? ''}',
+        maxOutput: '${j['maxOutput'] ?? ''}',
+        inputModalities: _strList(j['inputModalities']),
+        outputModalities: _strList(j['outputModalities']),
+        tools: j['tools'] == true,
+        reasoning: j['reasoning'] == true,
+        vision: j['vision'] == true,
+      );
+
+  static List<String> _strList(Object? v) => v is List
+      ? v.whereType<String>().toList()
+      : const <String>[];
+}
+
+/// 一个模型条目。
+///
+/// **只有能力声明，没有选择。**
+/// 采样策略、思考档位这类「选择」不放在这儿（它们是跟着角色的，进聊天栏）。
 class ModelRef {
   const ModelRef({
     required this.id,
     this.name = '',
     this.group = '',
     this.enabled = true,
-    this.thinking = ThinkingMode.auto,
-    this.effort = ReasoningEffort.auto,
-    this.maxTokens = '',
-    this.jsonOutput = false,
+    this.caps,
   });
 
   /// 发给接口的模型 id
@@ -116,17 +274,8 @@ class ModelRef {
 
   final bool enabled;
 
-  /// 思考模式
-  final ThinkingMode thinking;
-
-  /// 思考投入
-  final ReasoningEffort effort;
-
-  /// 最大输出 tokens。空 = 不传，用服务端默认。
-  final String maxTokens;
-
-  /// 是否请求 JSON 输出
-  final bool jsonOutput;
+  /// 能力声明。**只有预设模型有**；用户模型是 null。
+  final ModelCaps? caps;
 
   String get display => name.trim().isEmpty ? id : name;
   String get groupName => group.trim().isEmpty ? '默认' : group;
@@ -136,20 +285,14 @@ class ModelRef {
     String? name,
     String? group,
     bool? enabled,
-    ThinkingMode? thinking,
-    ReasoningEffort? effort,
-    String? maxTokens,
-    bool? jsonOutput,
+    ModelCaps? caps,
   }) =>
       ModelRef(
         id: id ?? this.id,
         name: name ?? this.name,
         group: group ?? this.group,
         enabled: enabled ?? this.enabled,
-        thinking: thinking ?? this.thinking,
-        effort: effort ?? this.effort,
-        maxTokens: maxTokens ?? this.maxTokens,
-        jsonOutput: jsonOutput ?? this.jsonOutput,
+        caps: caps ?? this.caps,
       );
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -157,10 +300,7 @@ class ModelRef {
         'name': name,
         'group': group,
         'enabled': enabled,
-        'thinking': thinking.name,
-        'effort': effort.name,
-        'maxTokens': maxTokens,
-        'jsonOutput': jsonOutput,
+        'caps': caps?.toJson(),
       };
 
   static ModelRef fromJson(Map<String, Object?> j) => ModelRef(
@@ -168,10 +308,9 @@ class ModelRef {
         name: '${j['name'] ?? ''}',
         group: '${j['group'] ?? ''}',
         enabled: j['enabled'] != false,
-        thinking: ThinkingMode.byName('${j['thinking'] ?? ''}'),
-        effort: ReasoningEffort.byName('${j['effort'] ?? ''}'),
-        maxTokens: '${j['maxTokens'] ?? ''}',
-        jsonOutput: j['jsonOutput'] == true,
+        caps: j['caps'] is Map
+            ? ModelCaps.fromJson((j['caps'] as Map).cast<String, Object?>())
+            : null,
       );
 }
 
@@ -179,10 +318,11 @@ class ModelRef {
 ///
 /// 预设来的服务商**没有**这个标记：端点对它们是死的事实，不用用户填。
 enum CustomShape {
-  openaiChat('OpenAI 兼容 · chat/completions', Protocol.openai, false),
-  openaiResponses('OpenAI 兼容 · Responses API', Protocol.openai, true),
-  google('Google 兼容', Protocol.google, false),
-  anthropic('Anthropic 兼容', Protocol.claude, false);
+  openaiChat('OpenAI 兼容 · chat/completions', Protocol.openaiCompatible, false),
+  openaiResponses('OpenAI 兼容 · Responses API', Protocol.openaiCompatible,
+      true),
+  google('Google 兼容', Protocol.googleCompatible, false),
+  anthropic('Anthropic 兼容', Protocol.anthropicCompatible, false);
 
   const CustomShape(this.label, this.protocol, this.responses);
 
@@ -193,7 +333,23 @@ enum CustomShape {
   final bool responses;
 }
 
-/// 一个服务商。
+/// 服务的类型。三类服务共用同一套“服务 + 清单”的结构。
+enum ServiceKind {
+  model('模型'),
+  search('搜索'),
+  voice('语音');
+
+  const ServiceKind(this.label);
+
+  final String label;
+
+  static ServiceKind byName(String s) => ServiceKind.values.firstWhere(
+        (ServiceKind k) => k.name == s,
+        orElse: () => ServiceKind.model,
+      );
+}
+
+/// 一个服务。
 class Provider {
   const Provider({
     required this.id,
@@ -207,6 +363,7 @@ class Provider {
     this.useResponsesApi = false,
     this.models = const <ModelRef>[],
     this.custom,
+    this.kind = ServiceKind.model,
   });
 
   final String id;
@@ -228,6 +385,16 @@ class Provider {
 
   /// 自定义起手形状。null = 从预设来的（端点不可改）。
   final CustomShape? custom;
+
+  /// 这是哪一类服务。
+  final ServiceKind kind;
+
+  /// 最大输出该发哪个参数名。
+  ///
+  /// OpenAI 现在推荐 `max_completion_tokens`，老名字 `max_tokens` 已过时；
+  /// 别家没这个说法，一律用 `max_tokens`。
+  String get maxTokensParam =>
+      protocol.isOpenAi ? 'max_completion_tokens' : 'max_tokens';
 
   /// 完整接口地址（展示用）。
   String get endpoint {
@@ -252,6 +419,7 @@ class Provider {
     bool? useResponsesApi,
     List<ModelRef>? models,
     CustomShape? custom,
+    ServiceKind? kind,
   }) =>
       Provider(
         id: id,
@@ -265,6 +433,7 @@ class Provider {
         useResponsesApi: useResponsesApi ?? this.useResponsesApi,
         models: models ?? this.models,
         custom: custom ?? this.custom,
+        kind: kind ?? this.kind,
       );
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -279,10 +448,11 @@ class Provider {
         'useResponsesApi': useResponsesApi,
         'models': models.map((ModelRef m) => m.toJson()).toList(),
         'custom': custom?.name,
+        'kind': kind.name,
       };
 
   static Provider fromJson(Map<String, Object?> j) {
-    final Protocol protocol = Protocol.byName('${j['protocol'] ?? ''}');
+    final Protocol protocol = Provider._protocolOf(j['protocol']);
     final List<dynamic> raw =
         (j['models'] as List<dynamic>?) ?? const <dynamic>[];
     return Provider(
@@ -300,7 +470,27 @@ class Provider {
           .map(Provider._model)
           .toList(),
       custom: Provider._custom('${j['custom'] ?? ''}'),
+      kind: Provider._kindOf(j['kind']),
     );
+  }
+
+  /// 缺 = 默认；在、但认不出来 = 抛（不静默降级成「模型」/「OpenAI」）。
+  static ServiceKind _kindOf(Object? v) {
+    if (v == null) return ServiceKind.model;
+    if (v is! String) throw const FormatException('kind 不是字符串');
+    for (final ServiceKind k in ServiceKind.values) {
+      if (k.name == v) return k;
+    }
+    throw FormatException('认不出的 kind：$v');
+  }
+
+  static Protocol _protocolOf(Object? v) {
+    if (v == null) return Protocol.openai;
+    if (v is! String) throw const FormatException('protocol 不是字符串');
+    for (final Protocol p in Protocol.values) {
+      if (p.name == v) return p;
+    }
+    throw FormatException('认不出的 protocol：$v');
   }
 
   static ModelRef _model(Map<String, dynamic> j) =>
@@ -363,43 +553,116 @@ const List<ProviderPreset> kProviderPresets = <ProviderPreset>[
   ),
   ProviderPreset(
     name: '硅基流动',
-    protocol: Protocol.openai,
+    protocol: Protocol.openaiCompatible,
     baseUrl: 'https://api.siliconflow.cn/v1',
   ),
   ProviderPreset(
     name: 'OpenRouter',
-    protocol: Protocol.openai,
+    protocol: Protocol.openaiCompatible,
     baseUrl: 'https://openrouter.ai/api/v1',
   ),
   ProviderPreset(
     name: '阿里云千问',
-    protocol: Protocol.openai,
+    protocol: Protocol.openaiCompatible,
     baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1',
   ),
   ProviderPreset(
     name: '智谱',
-    protocol: Protocol.openai,
+    protocol: Protocol.openaiCompatible,
     baseUrl: 'https://open.bigmodel.cn/api/paas/v4',
   ),
   ProviderPreset(
     name: 'Grok',
-    protocol: Protocol.openai,
+    protocol: Protocol.openaiCompatible,
     baseUrl: 'https://api.x.ai/v1',
   ),
   ProviderPreset(
     name: '火山引擎',
-    protocol: Protocol.openai,
+    protocol: Protocol.openaiCompatible,
     baseUrl: 'https://ark.cn-beijing.volces.com/api/v3',
   ),
   ProviderPreset(
     name: '月之暗面',
-    protocol: Protocol.openai,
+    protocol: Protocol.openaiCompatible,
     baseUrl: 'https://api.moonshot.cn/v1',
   ),
   ProviderPreset(
     name: 'Vercel',
-    protocol: Protocol.openai,
+    protocol: Protocol.openaiCompatible,
     baseUrl: 'https://ai-gateway.vercel.sh/v1',
+  ),
+];
+
+
+/// 搜索服务的预设。
+///
+/// 这份厂商列表只是起手方便，**不是定论**——名字、地址都可以随手改。
+/// 接口形状暂时借用 OpenAI 那一套（只影响鉴权头与请求体形状；
+/// 这两类服务现在还不真发请求）。
+const List<ProviderPreset> kSearchPresets = <ProviderPreset>[
+  ProviderPreset(
+    name: 'Tavily',
+    protocol: Protocol.openaiCompatible,
+    baseUrl: 'https://api.tavily.com',
+  ),
+  ProviderPreset(
+    name: 'Exa',
+    protocol: Protocol.openaiCompatible,
+    baseUrl: 'https://api.exa.ai',
+  ),
+  ProviderPreset(
+    name: 'Brave Search',
+    protocol: Protocol.openaiCompatible,
+    baseUrl: 'https://api.search.brave.com/res/v1',
+  ),
+  ProviderPreset(
+    name: 'Serper',
+    protocol: Protocol.openaiCompatible,
+    baseUrl: 'https://google.serper.dev',
+  ),
+  ProviderPreset(
+    name: '博查',
+    protocol: Protocol.openaiCompatible,
+    baseUrl: 'https://api.bochaai.com/v1',
+  ),
+  ProviderPreset(
+    name: 'SearXNG（自建）',
+    protocol: Protocol.openaiCompatible,
+    baseUrl: '',
+  ),
+];
+
+/// 语音服务的预设。同样是起手用的，随便改。
+const List<ProviderPreset> kVoicePresets = <ProviderPreset>[
+  ProviderPreset(
+    name: 'OpenAI 语音',
+    protocol: Protocol.openaiCompatible,
+    baseUrl: 'https://api.openai.com/v1',
+  ),
+  ProviderPreset(
+    name: 'ElevenLabs',
+    protocol: Protocol.openaiCompatible,
+    baseUrl: 'https://api.elevenlabs.io/v1',
+  ),
+  ProviderPreset(
+    name: 'MiniMax 语音',
+    protocol: Protocol.openaiCompatible,
+    baseUrl: 'https://api.minimax.chat/v1',
+  ),
+  ProviderPreset(
+    name: '火山引擎语音',
+    protocol: Protocol.openaiCompatible,
+    baseUrl: 'https://openspeech.bytedance.com/api/v1',
+  ),
+  ProviderPreset(
+    name: 'Azure Speech',
+    protocol: Protocol.openaiCompatible,
+    baseUrl: '',
+  ),
+  ProviderPreset(
+    name: '讯飞语音',
+    protocol: Protocol.openaiCompatible,
+    baseUrl: '',
   ),
 ];
 

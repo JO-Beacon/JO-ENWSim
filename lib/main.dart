@@ -4,6 +4,7 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show MethodChannel, rootBundle;
 
+import 'model/model_plan.dart';
 import 'model/provider.dart';
 import 'theme/settings_store.dart';
 import 'theme/tokens.dart';
@@ -18,15 +19,44 @@ void _registerOwnLicense() {
   });
 }
 
+/// 把**随包发出的**那几份许可正文也塞进清单。
+///
+/// 这些文件本来就在 `assets/licenses/` 里、跟安装包一起出去了；
+/// 注册一遍是为了在应用里也读得到（设置 → 关于 → 查看开源许可），
+/// 让人不用去翻安装目录。
+void _registerBundledLicenses() {
+  LicenseRegistry.addLicense(() async* {
+    final String text = await rootBundle
+        .loadString('assets/licenses/RemixIcon-License-1.0.txt');
+    yield LicenseEntryWithLineBreaks(<String>['Remix Icon'], text);
+  });
+  LicenseRegistry.addLicense(() async* {
+    final String text =
+        await rootBundle.loadString('assets/licenses/SourceHanSans-OFL-1.1.txt');
+    yield LicenseEntryWithLineBreaks(<String>['Noto Sans SC'], text);
+  });
+  LicenseRegistry.addLicense(() async* {
+    final String text =
+        await rootBundle.loadString('assets/licenses/SourceHanSans-OFL-1.1.txt');
+    yield LicenseEntryWithLineBreaks(<String>['Noto Serif SC'], text);
+  });
+}
+
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
   _registerOwnLicense();
+  _registerBundledLicenses();
   final SettingsStore store = await SettingsStore.open();
+  final LoadResult<List<Provider>> providers = store.loadProviders();
+  final LoadResult<ModelPlan> plan = store.loadGlobalPlan();
   runApp(
     JoEnwsApp(
       store: store,
       initial: store.load(),
-      providers: store.loadProviders(),
+      providers: providers.value,
+      servicesNote: loadNoteOf(providers, '服务商'),
+      initialGlobalPlan: plan.value,
+      globalPlanNote: loadNoteOf(plan, '模型默认'),
     ),
   );
 }
@@ -37,11 +67,22 @@ class JoEnwsApp extends StatefulWidget {
     required this.store,
     required this.initial,
     this.providers = const <Provider>[],
+    this.servicesNote,
+    this.initialGlobalPlan = const ModelPlan(),
+    this.globalPlanNote,
   });
 
   final SettingsStore store;
   final JoSettings initial;
   final List<Provider> providers;
+
+  /// 服务商存档读不出来时的一句话（没什么可说就是 null）。
+  final String? servicesNote;
+
+  final ModelPlan initialGlobalPlan;
+
+  /// 全局模型默认读不出来时的一句话。
+  final String? globalPlanNote;
 
   @override
   State<JoEnwsApp> createState() => _JoEnwsAppState();
@@ -51,6 +92,12 @@ class _JoEnwsAppState extends State<JoEnwsApp>
     with SingleTickerProviderStateMixin {
   late JoSettings _settings = widget.initial;
   late List<Provider> _providers = List<Provider>.of(widget.providers);
+
+  /// 全局模型默认（设置 → 引擎），存盘。
+  late ModelPlan _globalPlan = widget.initialGlobalPlan;
+
+  /// 快捷键：动作 id → 键位字符串。
+  late Map<String, String> _keys = widget.store.loadKeys();
 
   /// 明暗过渡：0 = 明（纸），1 = 暗（机器）。
   /// 直接在根上插色调色板，所有读 JoTheme.of 的组件就都跟着补间了。
@@ -157,6 +204,18 @@ class _JoEnwsAppState extends State<JoEnwsApp>
         onSettingsChanged: _update,
         providers: _providers,
         onProvidersChanged: _updateProviders,
+        globalPlan: _globalPlan,
+        keys: _keys,
+        onKeysChanged: (Map<String, String> next) {
+          setState(() => _keys = next);
+          widget.store.saveKeys(next);
+        },
+        servicesNote: widget.servicesNote,
+        globalPlanNote: widget.globalPlanNote,
+        onGlobalPlanChanged: (ModelPlan next) {
+          setState(() => _globalPlan = next);
+          widget.store.saveGlobalPlan(next);
+        },
       ),
     );
   }

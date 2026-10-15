@@ -9,16 +9,21 @@ import 'common.dart';
 /// 参数不在这里填。添加完右侧详情页会立刻显示这个服务商，那里本来就有
 /// 掩码 / 显示 / 测试、DeepSeek 参数区、模型列表，比弹窗里几个裸输入框好用。
 /// 换句话说：**添加是“选一个”，配置是“改它”**，两件事不挤在一个地方。
-Future<Provider?> showAddProviderDialog(BuildContext context) {
+Future<Provider?> showAddProviderDialog(
+  BuildContext context, {
+  List<ProviderPreset> presets = kProviderPresets,
+}) {
   return showDialog<Provider>(
     context: context,
     barrierColor: Colors.black.withValues(alpha: 0.55),
-    builder: (BuildContext c) => const _AddProviderDialog(),
+    builder: (BuildContext c) => _AddProviderDialog(presets: presets),
   );
 }
 
 class _AddProviderDialog extends StatelessWidget {
-  const _AddProviderDialog();
+  const _AddProviderDialog({required this.presets});
+
+  final List<ProviderPreset> presets;
 
   void _pop(
     BuildContext context, {
@@ -119,7 +124,7 @@ class _AddProviderDialog extends StatelessWidget {
       padding: const EdgeInsets.all(JoSpace.s4),
       children: <Widget>[
         _section(p, '厂商预设'),
-        for (final ProviderPreset ps in kProviderPresets)
+        for (final ProviderPreset ps in presets)
           _card(
             context,
             p,

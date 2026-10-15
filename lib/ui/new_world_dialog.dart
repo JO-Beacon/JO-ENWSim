@@ -85,6 +85,17 @@ class _WorldDialogState extends State<_WorldDialog> {
     super.dispose();
   }
 
+  /// 玩家扮演谁。空 = 没选。
+  String _player = '';
+
+  /// 走到第三步时能选的名字：跟 _finish 的过滤规则一致。
+  List<String> get _playerNames => <String>[
+        for (final _Draft d in _chars)
+          if (d.nameC.text.trim().isNotEmpty ||
+              d.personaC.text.trim().isNotEmpty)
+            (d.nameC.text.trim().isEmpty ? '（未命名）' : d.nameC.text.trim()),
+      ];
+
   bool get _canNext =>
       _settingC.text.trim().isNotEmpty && _openingC.text.trim().isNotEmpty;
 
@@ -132,6 +143,7 @@ class _WorldDialogState extends State<_WorldDialog> {
         characters: cards,
         lanes: base?.lanes ?? const <SeqLane>[],
         moves: base?.moves ?? const <MoveLink>[],
+        playerName: _player,
       ),
     );
   }
@@ -157,7 +169,11 @@ class _WorldDialogState extends State<_WorldDialog> {
         child: Column(
           children: <Widget>[
             _header(p),
-            Expanded(child: _step == 1 ? _body1(p) : _body2(p)),
+            Expanded(
+              child: _step == 1
+                  ? _body1(p)
+                  : (_step == 2 ? _body2(p) : _body3(p)),
+            ),
             _footer(p),
           ],
         ),
@@ -186,6 +202,8 @@ class _WorldDialogState extends State<_WorldDialog> {
           _stepChip(p, 1, '① 世界观与开场'),
           const SizedBox(width: JoSpace.s2),
           _stepChip(p, 2, '② 补全角色'),
+          const SizedBox(width: JoSpace.s2),
+          _stepChip(p, 3, '③ 扮演谁'),
           const Spacer(),
           GestureDetector(
             onTap: () => Navigator.of(context).pop(),
@@ -233,13 +251,23 @@ class _WorldDialogState extends State<_WorldDialog> {
               onTap: () => Navigator.of(context).pop(),
             )
           else
-            JoButton(text: '← 上一步', onTap: () => _goStep(1)),
+            JoButton(
+              text: '← 上一步',
+              onTap: () => _goStep(_step - 1),
+            ),
           const Spacer(),
           if (_step == 1)
             JoButton(
               text: '下一步 →',
               onTap: _canNext ? () => _goStep(2) : () {},
               color: _canNext ? p.accent : p.secondary,
+            )
+          else if (_step == 2)
+            JoButton(
+              // 一个角色都没有就跳过第三步，直接完成。
+              text: _playerNames.isEmpty ? '完成' : '下一步 →',
+              onTap: _playerNames.isEmpty ? _finish : () => _goStep(3),
+              color: p.accent,
             )
           else
             JoButton(
@@ -249,6 +277,68 @@ class _WorldDialogState extends State<_WorldDialog> {
             ),
         ],
       ),
+    );
+  }
+
+  // —— 第三步：扮演谁 ——
+
+  Widget _body3(JoPalette p) {
+    final List<String> names = _playerNames;
+    return ListView(
+      padding: const EdgeInsets.all(JoSpace.s4),
+      children: <Widget>[
+        Text(
+          '你要扮演哪一个？',
+          style: JoFonts.ui.copyWith(fontSize: 14, color: p.text),
+        ),
+        const SizedBox(height: JoSpace.s2),
+        Text(
+          '选中的那个就是玩家角色——它跟别的角色同一套数据，'
+          '只是行动由你决定，不由 AI 决定。',
+          style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+        ),
+        const SizedBox(height: JoSpace.s4),
+        Wrap(
+          spacing: JoSpace.s2,
+          runSpacing: JoSpace.s2,
+          children: <Widget>[
+            for (final String n in names)
+              GestureDetector(
+                // 再点一下取消选中。
+                onTap: () => setState(() => _player = n == _player ? '' : n),
+                child: MouseRegion(
+                  cursor: SystemMouseCursors.click,
+                  child: Container(
+                    padding: const EdgeInsets.symmetric(
+                      horizontal: JoSpace.s3,
+                      vertical: JoSpace.s2,
+                    ),
+                    decoration: BoxDecoration(
+                      color: n == _player ? p.surface : Colors.transparent,
+                      border: JoShape.border(
+                        n == _player ? p.accent : p.border,
+                      ),
+                      borderRadius: JoShape.br,
+                    ),
+                    child: Text(
+                      n,
+                      style: JoFonts.meta.copyWith(
+                        color: n == _player ? p.accent : p.secondary,
+                      ),
+                    ),
+                  ),
+                ),
+              ),
+          ],
+        ),
+        const SizedBox(height: JoSpace.s4),
+        Text(
+          _player.isEmpty
+              ? '还没选。不选也行——那就没有玩家角色，全交给 AI。'
+              : '你扮演：$_player　（再点一下那个名字可以取消）',
+          style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+        ),
+      ],
     );
   }
 

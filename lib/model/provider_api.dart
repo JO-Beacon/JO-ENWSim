@@ -46,6 +46,12 @@ class ProviderApi {
 
   /// 拉模型列表。成功 = 连上了。
   static Future<ProbeResult> fetchModels(Provider p) async {
+    if (p.protocol.listPath == null) {
+      return ProbeResult(
+        ok: false,
+        message: '${p.protocol.label}这个协议没有模型列表接口',
+      );
+    }
     final Uri? uri = _modelsUri(p);
     if (uri == null) {
       return const ProbeResult(ok: false, message: '接口地址填得不对');
@@ -57,7 +63,8 @@ class ProviderApi {
       if (r.statusCode < 200 || r.statusCode >= 300) {
         return ProbeResult(
           ok: false,
-          message: _httpMessage(r.statusCode, r.body),
+          message: _httpMessage(r.statusCode, r.body,
+              deepSeek: p.protocol.isDeepSeek),
         );
       }
       final List<String> ids = _parseIds(p.protocol, r.body);
@@ -80,7 +87,8 @@ class ProviderApi {
   /// 账号级接口（模型列表 / 余额）挂在主域名上。
   ///
   /// DeepSeek 的 Anthropic 格式是在路径后面加 /anthropic，
-  /// 但它的 /models、/user/balance 不跟着这个后缀走。
+  /// 但它的 /models、/user/balance 在主域名上——**不能**把 /models
+  /// 直接接在 /anthropic 后面。所以这里要把那个后缀剥掉。
   static String _accountBase(Provider p) {
     final String base = p.baseUrl.trim().replaceAll(RegExp(r'/+$'), '');
     const String suffix = '/anthropic';
@@ -92,12 +100,13 @@ class ProviderApi {
 
   static Uri? _modelsUri(Provider p) {
     final String base = _accountBase(p);
-    if (base.isEmpty) return null;
-    if (p.protocol == Protocol.google) {
+    final String? path = p.protocol.listPath;
+    if (base.isEmpty || path == null) return null;
+    if (p.protocol.wire == Wire.google) {
       final String key = Uri.encodeQueryComponent(p.apiKey.trim());
-      return Uri.tryParse('$base/models?key=$key');
+      return Uri.tryParse('$base$path?key=$key');
     }
-    return Uri.tryParse('$base/models');
+    return Uri.tryParse('$base$path');
   }
 
   static Map<String, String> _headers(Provider p) {
@@ -154,11 +163,16 @@ class ProviderApi {
   }
 
   /// 错误码先翻译成人话，再附上原文。
-  static String _httpMessage(int code, String body) {
-    final String hint = const <int, String>{
+  ///
+  /// **按厂商分**：402“余额不足”是 DeepSeek 的说法，OpenAI 那边没这一条
+  /// （它是 403）；所以别拿一份表套所有厂商。
+  static String _httpMessage(int code, String body, {bool deepSeek = false}) {
+    final String hint = <int, String>{
           400: '请求格式不对',
           401: 'API Key 不对',
-          402: '余额不足，去充值',
+          403: '没有权限',
+          404: '地址或模型不存在',
+          if (deepSeek) 402: '余额不足，去充值',
           422: '参数不合法',
           429: '请求太快，限流了',
           500: '服务端出错',

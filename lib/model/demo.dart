@@ -76,6 +76,7 @@ class World {
     required this.characters,
     required this.lanes,
     required this.moves,
+    this.playerName = '',
   });
 
   final String id;
@@ -93,6 +94,9 @@ class World {
   /// 已知角色（手写的 + AI 分析的）
   final List<CharCard> characters;
 
+  /// 玩家扮演哪个角色。空 = 还没定（或这个世界没有角色）。
+  final String playerName;
+
   final List<SeqLane> lanes;
   final List<MoveLink> moves;
 }
@@ -102,6 +106,8 @@ class DemoData {
     World(
       id: 'w1',
       name: '旧宅 · 雨夜',
+      // 有玩家角色，所以这个世界有输入框。
+      playerName: '人物1',
       note: '三个地点 · 一场雨',
       setting: '民国，南方小城，连日阴雨。\n旧宅“听雨楼”的主人三天前失踪，屋里的灯还亮着。',
       opening: '雨敲在瓦上。你站在旧宅的门廊下，衣角在滴水。\n门没有锁。',

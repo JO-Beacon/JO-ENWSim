@@ -2,9 +2,14 @@ import 'package:flutter/material.dart';
 import 'package:package_info_plus/package_info_plus.dart';
 import 'package:url_launcher/url_launcher.dart';
 
+import '../model/languages.dart';
+import '../model/model_plan.dart';
 import '../model/provider.dart';
+import '../model/shortcuts.dart';
 import '../theme/tokens.dart';
 import 'common.dart';
+import 'licenses_page.dart';
+import 'model_plan_dialog.dart';
 import 'provider_panel.dart';
 
 /// 设置：左边分类列表，右边内容。
@@ -15,11 +20,29 @@ class SettingsPage extends StatefulWidget {
     required this.onChanged,
     required this.providers,
     required this.onProvidersChanged,
+    required this.globalPlan,
+    required this.onGlobalPlanChanged,
+    this.servicesNote,
+    this.globalPlanNote,
+    required this.keys,
+    required this.onKeysChanged,
     required this.onBack,
   });
 
   final JoSettings settings;
   final ValueChanged<JoSettings> onChanged;
+
+  /// 全局模型默认：总默认 + 每种步骤的全局默认。
+  final ModelPlan globalPlan;
+  final ValueChanged<ModelPlan> onGlobalPlanChanged;
+
+  /// 存档读不出来时的提示语（如实说，不藏）。
+  final String? servicesNote;
+  final String? globalPlanNote;
+
+  /// 快捷键：动作 id → 键位字符串。
+  final Map<String, String> keys;
+  final ValueChanged<Map<String, String>> onKeysChanged;
   final List<Provider> providers;
   final ValueChanged<List<Provider>> onProvidersChanged;
   final VoidCallback onBack;
@@ -32,23 +55,164 @@ class _SettingsPageState extends State<SettingsPage> {
   static const List<String> _tabs = <String>[
     '语言',
     '外观',
-    '服务商',
+    '行为',
+    '快捷键',
+    '模型服务',
+    '搜索服务',
+    '语音服务',
     '引擎',
     '数据',
     '关于',
   ];
 
   /// 流程图里各步决策用的提示词。
-  static const List<({String id, String title, String hint})> _prompts =
-      <({String id, String title, String hint})>[
-    (id: 'A0', title: 'A₀ · 是否分裂序列', hint: '判断这条序列要不要裂成两条'),
-    (id: 'A1', title: 'A₁ · 环境更新', hint: '把世界自身的事件推进到当前时刻'),
-    (id: 'A2', title: 'A₂ · 框选参与的 B', hint: '本回合有资格执行 B₂ 的角色'),
-    (id: 'A3', title: 'A₃ · 框选唯一 B', hint: '从参与角色里挑出唯一一个执行 B₂'),
-    (id: 'A4', title: 'A₄ · 是否需要合并', hint: '要不要和其他序列合并'),
-    (id: 'B1', title: 'B₁ · 角色感知', hint: '该角色感知到了什么'),
-    (id: 'B2', title: 'B₂ · 角色行为', hint: '该角色如何行动'),
-  ];
+  ///
+  /// 步骤清单与“每世界模型配置”共用 model_plan.dart 里的 kSteps，
+  /// 免得以后改步骤要改两处。
+  static const List<StepKind> _prompts = kSteps;
+
+  /// 三类服务共用同一块面板：模型 / 搜索 / 语音只是清单与预设不同。
+  Widget _servicePanel(ServiceKind kind) {
+    return ProviderPanel(
+      providers: <Provider>[
+        for (final Provider x in widget.providers)
+          if (x.kind == kind) x,
+      ],
+      note: widget.servicesNote,
+      presets: switch (kind) {
+        ServiceKind.model => kProviderPresets,
+        ServiceKind.search => kSearchPresets,
+        ServiceKind.voice => kVoicePresets,
+      },
+      onChanged: (List<Provider> next) {
+        // 只换这一类，别动其它类。
+        widget.onProvidersChanged(<Provider>[
+          for (final Provider x in widget.providers)
+            if (x.kind != kind) x,
+          ...next,
+        ]);
+      },
+    );
+  }
+
+  Future<void> _pickGlobalModel(String stepId) async {
+    final ModelPick? pick = await showModelPicker(
+      context,
+      groups: modelGroupsOf(widget.providers),
+      current: stepId.isEmpty
+          ? widget.globalPlan.defaultRef
+          : widget.globalPlan.stepKey(stepId),
+      clearLabel: stepId.isEmpty ? '不设（未设置）' : '不设（跟随全局默认）',
+    );
+    if (!mounted) return;
+    widget.onGlobalPlanChanged(
+      stepId.isEmpty
+          ? widget.globalPlan.copyWith(defaultRef: pick?.key ?? '')
+          : widget.globalPlan.withStep(stepId, pick?.key ?? ''),
+    );
+  }
+
+  /// 全局那两级：总默认 + 每种步骤的全局默认。
+  List<Widget> _globalModels(JoPalette p) {
+    return <Widget>[
+      _modelRow(
+        p,
+        title: '全局默认',
+        hint: '所有步骤最后都落到它',
+        stepId: '',
+        follow: '未设置',
+      ),
+      for (final StepKind s in kSteps)
+        _modelRow(
+          p,
+          title: s.title,
+          hint: s.hint,
+          stepId: s.id,
+          follow: '跟随全局默认',
+        ),
+    ];
+  }
+
+  Widget _modelRow(
+    JoPalette p, {
+    required String title,
+    required String hint,
+    required String stepId,
+    required String follow,
+  }) {
+    final String key = stepId.isEmpty
+        ? widget.globalPlan.defaultRef
+        : widget.globalPlan.stepKey(stepId);
+    final String value =
+        modelKeyLabel(modelGroupsOf(widget.providers), key);
+    return _modelRowBox(
+      p,
+      title: title,
+      hint: hint,
+      value: value.isEmpty ? follow : value,
+      set: value.isNotEmpty,
+      onTap: () => _pickGlobalModel(stepId),
+    );
+  }
+
+  Widget _modelRowBox(
+    JoPalette p, {
+    required String title,
+    required String hint,
+    required String value,
+    required bool set,
+    required VoidCallback onTap,
+  }) {
+    return JoTap(
+      onTap: onTap,
+      opaque: false,
+      builder: (BuildContext context, bool hover, bool down) {
+        return AnimatedContainer(
+          duration: kJoTapMs,
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(
+            horizontal: JoSpace.s3,
+            vertical: JoSpace.s2,
+          ),
+          decoration: BoxDecoration(
+            color: hover ? p.surface : Colors.transparent,
+            border: JoShape.border(hover ? p.accent : p.border),
+            borderRadius: JoShape.br,
+          ),
+          child: Row(
+            children: <Widget>[
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(title,
+                        style:
+                            JoFonts.ui.copyWith(fontSize: 13, color: p.text)),
+                    const SizedBox(height: 2),
+                    Text(
+                      hint,
+                      overflow: TextOverflow.ellipsis,
+                      style: JoFonts.meta
+                          .copyWith(color: p.secondary, fontSize: 10),
+                    ),
+                  ],
+                ),
+              ),
+              const SizedBox(width: JoSpace.s3),
+              Text(
+                value,
+                overflow: TextOverflow.ellipsis,
+                style: JoFonts.meta.copyWith(
+                  color: set ? p.accent : p.secondary,
+                  fontSize: 10,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
+    );
+  }
 
   int _tab = 0;
   late final Future<PackageInfo> _info = PackageInfo.fromPlatform();
@@ -101,11 +265,8 @@ class _SettingsPageState extends State<SettingsPage> {
                         FadeTransition(opacity: a, child: child),
                     child: KeyedSubtree(
                       key: ValueKey<int>(_tab),
-                      child: _tab == 2
-                          ? ProviderPanel(
-                              providers: widget.providers,
-                              onChanged: widget.onProvidersChanged,
-                            )
+                      child: _tab >= 4 && _tab <= 6
+                          ? _servicePanel(ServiceKind.values[_tab - 4])
                           : _body(p),
                     ),
                   ),
@@ -173,16 +334,55 @@ class _SettingsPageState extends State<SettingsPage> {
     );
   }
 
-  /// 页签下标：0 语言 / 1 外观 / 2 服务商（外面板接管，不进这里）/ 3 引擎 / 4 数据 / 5 关于
+  /// 界面语言。只有这一个语言设置，没别的。
+  String _lang = kJoLangDefault;
+
+  /// 页签下标：0 语言 / 1 外观 / 2 行为（先留空）/ 3 快捷键
+  ///           / 4–6 三类服务（外面板接管）/ 7 引擎 / 8 数据 / 9 关于
   List<Widget> _content(JoPalette p) {
     switch (_tab) {
       case 0: // 语言
         return <Widget>[
           JoSection(
-            title: '语言',
+            title: '界面语言',
             children: <Widget>[
-              _pending('界面语言', '中文 · English 还没做'),
+              for (final JoLanguage l in kJoLanguages)
+                JoTap(
+                  onTap: () => setState(() => _lang = l.tag),
+                  builder: (BuildContext c, bool hover, bool down) => Padding(
+                    padding:
+                        const EdgeInsets.symmetric(vertical: JoSpace.s2),
+                    child: Row(
+                      children: <Widget>[
+                        SizedBox(
+                          width: 22,
+                          child: _lang == l.tag
+                              ? Text(
+                                  '✓',
+                                  style: JoFonts.meta.copyWith(color: p.accent),
+                                )
+                              : null,
+                        ),
+                        Expanded(
+                          child: Text(
+                            l.label,
+                            style: JoFonts.ui.copyWith(
+                              fontSize: 13,
+                              color: _lang == l.tag ? p.text : p.secondary,
+                            ),
+                          ),
+                        ),
+                      ],
+                    ),
+                  ),
+                ),
             ],
+          ),
+          const SizedBox(height: JoSpace.s3),
+          Text(
+            '列表按国际标准写：BCP 47 标签（zh-Hans-CN 这种）+ 语言自己的名字。'
+            '目前只有中文（中国）做好了 —— 选别的不会换掉界面文字，也不存。',
+            style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
           ),
         ];
       case 1: // 外观
@@ -259,17 +459,96 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ),
         ];
-      case 3: // 引擎
+      case 3: // 快捷键
+        return <Widget>[
+          Text(
+            '点一下那块，然后按你要的组合键，就记下了。\n'
+            '想退出捕获就点别处；按 Esc 则清除这一条（变成未设置）。'
+            '认不出来的键会当场标出来。',
+            style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+          ),
+          const SizedBox(height: JoSpace.s5),
+          JoSection(
+            title: '快捷键',
+            children: <Widget>[
+              for (final JoKeyItem k in kJoKeys) ...<Widget>[
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      flex: 2,
+                      child: Text(
+                        k.label,
+                        style: JoFonts.ui.copyWith(fontSize: 13, color: p.text),
+                      ),
+                    ),
+                    const SizedBox(width: JoSpace.s3),
+                    Expanded(
+                      flex: 3,
+                      child: JoKeyField(
+                        spec: widget.keys[k.id] ?? k.fallback,
+                        onChanged: (String v) => widget.onKeysChanged(
+                          <String, String>{...widget.keys, k.id: v},
+                        ),
+                      ),
+                    ),
+                    SizedBox(
+                      width: 18,
+                      // 空 = 没设，不是“认不出”
+                      child: (widget.keys[k.id] ?? '').trim().isNotEmpty &&
+                              joActivator(widget.keys[k.id] ?? '') == null
+                          ? Text(
+                              '认不出',
+                              style: JoFonts.meta.copyWith(color: p.accent),
+                            )
+                          : null,
+                    ),
+                  ],
+                ),
+                const SizedBox(height: JoSpace.s3),
+              ],
+            ],
+          ),
+          const SizedBox(height: JoSpace.s4),
+          Align(
+            alignment: Alignment.centerLeft,
+            child: JoButton(
+              text: '还原回默认',
+              bordered: true,
+              onTap: () => widget.onKeysChanged(joDefaultKeys()),
+            ),
+          ),
+          const SizedBox(height: JoSpace.s4),
+          Text(
+            '「发送」这条落在输入框上，其余几条是全局的。'
+            '改完立刻生效，也存在本地。',
+            style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
+          ),
+        ];
+      case 2: // 行为（先留空）
+        return <Widget>[];
+      case 7: // 引擎
         return <Widget>[
           Text(
             '引擎还没接入：这里填的提示词暂时不会被用到。',
             style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
           ),
+          if (widget.globalPlanNote != null) ...<Widget>[
+            const SizedBox(height: JoSpace.s3),
+            Text(
+              widget.globalPlanNote!,
+              style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+            ),
+          ],
+          const SizedBox(height: JoSpace.s5),
+          JoSection(
+            title: '全局默认模型',
+            children: _globalModels(p),
+          ),
           const SizedBox(height: JoSpace.s5),
           for (final ({String id, String title, String hint}) pr in _prompts)
             _prompt(p, pr.title, pr.hint, _promptC[pr.id]!),
         ];
-      case 4: // 数据
+      case 8: // 数据
         return <Widget>[
           JoSection(
             title: '存档（还没接入）',
@@ -321,6 +600,7 @@ class _SettingsPageState extends State<SettingsPage> {
         children: <Widget>[
           _kv(p, '本应用', 'Apache-2.0 · © 2026 JO-Beacon'),
           _kv(p, '字体', '思源黑体 / 思源宋体（SIL OFL 1.1）'),
+          _kv(p, '图标', 'Remix Icon（Remix Icon License v1.0）'),
           JoField(
             label: '开源依赖',
             hint: 'Flutter / Dart 及 pub 依赖',
@@ -413,12 +693,29 @@ class _SettingsPageState extends State<SettingsPage> {
     }
   }
 
-  /// Flutter 会把所有 pub 依赖的许可汇总进应用里，这里直接展示那份。
+  /// 开源许可。**自己写的一页** —— 自带那个会把框架的许可按库文件重复几百遍。
+  ///
+  /// 转场也用我们自己的：160ms 淡入淡出，不做位移（跟页面切换一致）。
+  /// 所以这里不用 MaterialPageRoute（它带系统的滑动转场）。
   void _openLicenses() {
-    showLicensePage(
-      context: context,
-      applicationName: 'JO-ENWSim',
-      applicationLegalese: 'Apache-2.0 · © 2026 JO-Beacon',
+    Navigator.of(context).push(
+      PageRouteBuilder<void>(
+        transitionDuration: const Duration(milliseconds: 160),
+        reverseTransitionDuration: const Duration(milliseconds: 160),
+        pageBuilder: (
+          BuildContext c,
+          Animation<double> primary,
+          Animation<double> secondary,
+        ) =>
+            const LicensesPage(),
+        transitionsBuilder: (
+          BuildContext c,
+          Animation<double> a,
+          Animation<double> secondary,
+          Widget child,
+        ) =>
+            FadeTransition(opacity: a, child: child),
+      ),
     );
   }
 
