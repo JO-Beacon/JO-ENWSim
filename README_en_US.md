@@ -3,44 +3,81 @@
 **Emergent Narrative World Simulator**
 No plot. Just causality.
 
-> No plot. Just causality.
-> Set the world, drop the opening, let it unfold.
+> Set a world, drop in an opening, let it unfold on its own.
 
-JO-ENWSim is an emergent narrative simulator — a multi-agent causal sandbox. The player controls one character (the player character), while AI drives multiple NPCs. There is no script; the world unfolds purely through causality.
+JO-ENWSim is an emergent narrative simulator — a causal sandbox run by multiple agents. The player controls one character; AI drives the others. There is no script. The world unfolds by causality.
 
-[中文](./README.md)
+[中文](./README.md) · [Apache License 2.0](./LICENSE)
 
-## Principles
+![Workspace](./docs/screenshot.png)
 
-- **Information isolation** — every character has its own data; when AI drives a character, it can only see that character's information.
-- **Never feed raw history** — AI only sees structured information extracted from the past, avoiding pattern fixation from long context.
-- **The player character gets no special treatment** — it is fully isomorphic to NPCs; the only exception is that its behavior is decided by the player, not by AI.
+The workspace above: the left rail lists worlds; the middle is the **sequence canvas** (each column is a location, each step is an event, and the lines crossing columns are "moved to another place"); the right panel is the world itself — its setting, opening, characters, memories, and model configuration.
+
+## Status
+
+**The interface is real and usable. The engine is not wired up yet.**
+
+- What works: creating worlds, writing the setting and opening, adding characters, configuring model providers, writing memories, rebinding shortcuts
+- What does not: **the world does not actually advance.** Until a model is connected, the canvas shows demo data, and anything typed into the input box never enters the world
+
+Anything in the interface that is not connected yet says so on the spot. It does not pretend otherwise.
+
+## Core principles
+
+- **Information isolation** — every character keeps its own data. When one character is driven, it sees only what that character knows, never what the others do.
+- **Never feed raw history** — the whole history is not handed to the model. It gets only what it should know at this moment: the character's own memories, plus what it perceives right now.
+- **The player character gets no special treatment** — it is structurally identical to an NPC. The only difference: its actions are decided by the player, and the AI must not decide them instead.
 
 ## How it works
 
-The basic unit is **one behavior by one character = one turn**. Three kinds of agents share a single flow:
+The unit is **one character acting once = one turn**. Three kinds of agents share a single flow:
 
 | Agent | Role |
-|-------|------|
-| **God** (AI, omniscient) | Advances the world, selects participating characters, decides who acts next |
-| **Character Perception** (one per character, AI) | What that character perceives right now |
-| **Character Behavior** (one per character) | How that character acts; NPCs are driven by AI, the player character by the player |
+| --- | --- |
+| **God** (AI, omniscient) | Advances the world, selects which characters take part, decides who acts next |
+| **Perception** (one per character, AI) | What this character perceives right now |
+| **Action** (one per character) | How this character acts; NPCs are driven by AI, the player character by the player |
+
+Models can be assigned in layers, from specific to general: **a character's own step → the world default → the global default**.
+
+## Build and run
+
+Requires [Flutter](https://flutter.dev) (stable).
+
+```sh
+flutter pub get
+
+# run
+flutter run -d windows
+
+# Windows release
+scripts/build.ps1            # add -SkipAndroid to skip the Android build
+```
+
+Artifacts:
+
+- Windows: `build/windows/x64/runner/Release/joenws.exe`
+- Installer (Inno Setup) and split-per-ABI Android APKs: `dist/`
 
 ## Naming
 
 | Use | Name |
-|-----|------|
-| Repository / product | `JO-ENWSim` |
-| CLI command | `joenws` |
-| Python package | `joenws` |
-| npm package | `JO-ENWSim` |
+| --- | --- |
+| Product / repository | `JO-ENWSim` |
+| Dart package | `joenws` |
+| Executable | `joenws.exe` |
+| Android application ID | `io.github.jobeacon.joenws` |
 
-Use `JO-ENWSim` for the product name; use `joenws` or `jo_enws` in code (avoid hyphens and capitals).
-
-## Status
-
-Early design stage; no working code yet.
+The product name is `JO-ENWSim`; code identifiers use `joenws`.
 
 ## License
 
-TBD.
+[Apache License 2.0](./LICENSE) · Copyright 2026 JO-Beacon
+
+Third-party components distributed with this project are listed in [NOTICE](./NOTICE):
+
+- Flutter, Dart (BSD-3-Clause)
+- Noto Sans SC / Noto Serif SC (SIL OFL 1.1)
+- Remix Icon (Remix Icon License v1.0)
+
+The full text of each license lives in [`assets/licenses/`](./assets/licenses), and can also be read inside the app: **Settings → About → View open-source licenses**.
