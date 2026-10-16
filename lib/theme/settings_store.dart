@@ -48,6 +48,7 @@ class SettingsStore {
   static const String _kProviders = 'provider.list';
   static const String _kGlobalPlan = 'model.global';
   static const String _kKeys = 'input.keys';
+  static const String _kFollow = 'ui.followSystem';
 
   static Future<SettingsStore> open() async =>
       SettingsStore(await SharedPreferences.getInstance());
@@ -55,6 +56,7 @@ class SettingsStore {
   JoSettings load() {
     return JoSettings(
       isDark: _prefs.getBool(_kDark) ?? true,
+      followSystem: _prefs.getBool(_kFollow) ?? false,
       bodySize: _prefs.getDouble(_kBodySize) ?? 16,
       serifBody: _prefs.getBool(_kSerif) ?? true,
     );
@@ -62,6 +64,7 @@ class SettingsStore {
 
   Future<void> save(JoSettings s) async {
     await _prefs.setBool(_kDark, s.isDark);
+    await _prefs.setBool(_kFollow, s.followSystem);
     await _prefs.setDouble(_kBodySize, s.bodySize);
     await _prefs.setBool(_kSerif, s.serifBody);
   }

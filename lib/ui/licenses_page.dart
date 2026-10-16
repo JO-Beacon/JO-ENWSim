@@ -10,6 +10,7 @@ import 'package:flutter/material.dart';
 
 import '../theme/tokens.dart';
 import 'common.dart';
+import 'icons.dart';
 
 class LicensesPage extends StatefulWidget {
   const LicensesPage({super.key});
@@ -57,8 +58,9 @@ class _LicensesPageState extends State<LicensesPage> {
             padding: const EdgeInsets.all(JoSpace.s4),
             child: Row(
               children: <Widget>[
-                JoButton(
-                  text: '← 返回',
+                JoIconAction(
+                  icon: JoIcons.arrowLeft,
+                  tip: '返回',
                   onTap: () => Navigator.of(context).maybePop(),
                 ),
                 const SizedBox(width: JoSpace.s4),

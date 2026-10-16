@@ -10,6 +10,7 @@ class JoPalette {
     required this.border,
     required this.text,
     required this.secondary,
+    required this.icon,
     required this.accent,
     required this.isDark,
   });
@@ -19,6 +20,12 @@ class JoPalette {
   final Color border;
   final Color text;
   final Color secondary;
+
+  /// 图标与结构件（分隔、表头那类）专用的一档。
+  /// 和 [secondary] 分开，是为了以后能单独调它而不动正文。
+  /// 初值取得跟 secondary 一样，所以加它是**零视觉变化**。
+  final Color icon;
+
   final Color accent;
   final bool isDark;
 
@@ -29,6 +36,7 @@ class JoPalette {
     border: Color(0xFF262A31),
     text: Color(0xFFE6E3DC),
     secondary: Color(0xFF8A8F98),
+    icon: Color(0xFF8A8F98),
     accent: Color(0xFF8AA0B8),
     isDark: true,
   );
@@ -44,6 +52,7 @@ class JoPalette {
       border: Color.lerp(a.border, b.border, t)!,
       text: Color.lerp(a.text, b.text, t)!,
       secondary: Color.lerp(a.secondary, b.secondary, t)!,
+      icon: Color.lerp(a.icon, b.icon, t)!,
       accent: Color.lerp(a.accent, b.accent, t)!,
       isDark: t < 0.5 ? a.isDark : b.isDark,
     );
@@ -56,6 +65,7 @@ class JoPalette {
     border: Color(0xFFE0DAD0),
     text: Color(0xFF1C1B19),
     secondary: Color(0xFF6E6A62),
+    icon: Color(0xFF6E6A62),
     accent: Color(0xFF9A7B4F),
     isDark: false,
   );
@@ -112,9 +122,16 @@ class JoSettings {
     this.isDark = true,
     this.bodySize = 16,
     this.serifBody = true,
+    this.followSystem = false,
   });
 
   final bool isDark;
+
+  /// 跟随系统明暗。
+  ///
+  /// 开了之后，实际用哪一套由平台亮度决定，[isDark] 被忽略
+  /// （但保留它——关掉跟随时要回到用户上次选的那套）。
+  final bool followSystem;
 
   /// 叙事正文字号。
   final double bodySize;
@@ -122,7 +139,9 @@ class JoSettings {
   /// 正文用宋体（true）还是黑体（false）。
   final bool serifBody;
 
-  JoPalette get palette => isDark ? JoPalette.dark : JoPalette.light;
+  // 注意：这里**故意不提供** `palette` 这个便利方法。
+  // “实际用哪一套”得把 followSystem 也算进去，只有 main.dart 里那个
+  // `_effectiveDark` 知道——留着个只认 isDark 的 getter，就是个会说谎的陷阱。
 
   String get bodyFamily => serifBody ? JoFonts.serif : JoFonts.sans;
 
@@ -133,11 +152,17 @@ class JoSettings {
         color: color,
       );
 
-  JoSettings copyWith({bool? isDark, double? bodySize, bool? serifBody}) {
+  JoSettings copyWith({
+    bool? isDark,
+    double? bodySize,
+    bool? serifBody,
+    bool? followSystem,
+  }) {
     return JoSettings(
       isDark: isDark ?? this.isDark,
       bodySize: bodySize ?? this.bodySize,
       serifBody: serifBody ?? this.serifBody,
+      followSystem: followSystem ?? this.followSystem,
     );
   }
 }

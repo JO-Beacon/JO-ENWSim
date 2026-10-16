@@ -497,7 +497,8 @@ class _Input extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final JoSettings s = JoTheme.settingsOf(context);
-    final JoPalette p = s.palette;
+    // 不用 s.palette —— 那个 getter 已被删除（它算不出跟随系统）。
+    final JoPalette p = JoTheme.of(context);
     return Container(
       margin: const EdgeInsets.only(top: JoSpace.s2),
       padding: const EdgeInsets.symmetric(

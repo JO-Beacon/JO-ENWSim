@@ -32,7 +32,11 @@ class JoIcons {
   static const IconData more = IconData(0xef79, fontFamily: _kFamily);
   static const IconData refresh = IconData(0xf064, fontFamily: _kFamily);
   static const IconData search = IconData(0xf0d1, fontFamily: _kFamily);
+  // —— 界面
   static const IconData settings = IconData(0xf0ee, fontFamily: _kFamily);
+  // 明暗切换：现在显示当前是哪一套
+  static const IconData sun = IconData(0xf1bf, fontFamily: _kFamily);
+  static const IconData moon = IconData(0xef75, fontFamily: _kFamily);
 
   // —— 编辑
   static const IconData edit = IconData(0xec86, fontFamily: _kFamily);
@@ -63,6 +67,7 @@ class JoIcons {
   static const IconData sparkling = IconData(0xf36d, fontFamily: _kFamily);
 
   // —— 输入
+  // 发送用 send-plane（斜的那只）。
   static const IconData send = IconData(0xf0da, fontFamily: _kFamily);
   static const IconData camera = IconData(0xeb31, fontFamily: _kFamily);
   static const IconData file = IconData(0xeceb, fontFamily: _kFamily);

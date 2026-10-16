@@ -393,14 +393,25 @@ class _SettingsPageState extends State<SettingsPage> {
               JoField(
                 label: '主题',
                 hint: '暗 = 机器，明 = 纸',
-                child: JoSegment<bool>(
-                  options: const <({String label, bool value})>[
-                    (label: '暗 · 机器', value: true),
-                    (label: '明 · 纸', value: false),
+                child: JoSegment<String>(
+                  options: const <({String label, String value})>[
+                    (label: '跟随系统', value: 'system'),
+                    (label: '暗 · 机器', value: 'dark'),
+                    (label: '明 · 纸', value: 'light'),
                   ],
-                  value: widget.settings.isDark,
-                  onChanged: (bool v) =>
-                      widget.onChanged(widget.settings.copyWith(isDark: v)),
+                  value: widget.settings.followSystem
+                      ? 'system'
+                      : (widget.settings.isDark ? 'dark' : 'light'),
+                  // 选「跟随系统」时**保留** isDark —— 那是上次选的那套，
+                  // 以后关掉跟随时要回到它。
+                  onChanged: (String v) => widget.onChanged(
+                    widget.settings.copyWith(
+                      followSystem: v == 'system',
+                      isDark: v == 'dark'
+                          ? true
+                          : (v == 'light' ? false : widget.settings.isDark),
+                    ),
+                  ),
                 ),
               ),
             ],

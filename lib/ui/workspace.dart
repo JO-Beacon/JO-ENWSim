@@ -10,6 +10,7 @@ import '../model/provider.dart';
 import '../model/shortcuts.dart';
 import '../theme/tokens.dart';
 import 'common.dart';
+import 'icons.dart';
 import 'char_choices_dialog.dart';
 import 'model_plan_dialog.dart';
 import 'world_settings.dart';
@@ -1117,12 +1118,13 @@ class _WorldRail extends StatelessWidget {
             ),
             child: Row(
               children: <Widget>[
-                JoButton(text: '设置', onTap: onSettings),
-                const Spacer(),
-                JoButton(
-                  text: isDark ? '暗' : '明',
-                  onTap: onTheme,
-                  color: p.accent,
+                // 左下角只剩一个：进设置。
+                // 主题切换**不摆在这儿** —— 它要选“跟随系统 / 暗 / 明”三态，
+                // 那是设置 → 外观 的事，放这里名不正言不顾。
+                JoIconAction(
+                  icon: JoIcons.settings,
+                  tip: '设置',
+                  onTap: onSettings,
                 ),
               ],
             ),
@@ -1630,13 +1632,16 @@ class _ComposeBar extends StatelessWidget {
             style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
           ),
           const Spacer(),
-          for (final String label in const <String>[
-            '插入媒体',
-            '插入文件',
-            '拍照',
-            '联网搜索',
+          // 这四个从文字换成了图标。悬停浮底色、图标亮一档，不描边 ——
+          // 跟界面里其它工具栏一个做法。
+          for (final ({IconData icon, String tip}) act
+              in const <({IconData icon, String tip})>[
+            (icon: JoIcons.image, tip: '插入媒体'),
+            (icon: JoIcons.file, tip: '插入文件'),
+            (icon: JoIcons.camera, tip: '拍照'),
+            (icon: JoIcons.global, tip: '联网搜索'),
           ])
-            JoButton(text: label, onTap: () {}),
+            JoIconAction(icon: act.icon, tip: act.tip, onTap: () {}),
         ],
       ),
     );
@@ -1682,13 +1687,13 @@ class _InputBar extends StatelessWidget {
               sendKey: sendKey,
             ),
           ),
-          const SizedBox(width: JoSpace.s3),
-          GestureDetector(
+          const SizedBox(width: JoSpace.s2),
+          JoIconAction(
+            icon: JoIcons.send,
+            tip: '发送',
             onTap: onSubmit,
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: Text('↵', style: JoFonts.meta.copyWith(color: p.accent)),
-            ),
+            size: 18,
+            inverted: true,
           ),
         ],
       ),
@@ -1725,7 +1730,8 @@ class _JoInputState extends State<_JoInput> {
   @override
   Widget build(BuildContext context) {
     final JoSettings s = JoTheme.settingsOf(context);
-    final JoPalette p = s.palette;
+    // 不用 s.palette —— 那个 getter 已被删除（它算不出跟随系统）。
+    final JoPalette p = JoTheme.of(context);
     return ValueListenableBuilder<TextEditingValue>(
       valueListenable: widget.controller,
       builder: (BuildContext context, TextEditingValue value, _) {

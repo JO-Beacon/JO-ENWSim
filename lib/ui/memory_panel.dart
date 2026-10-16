@@ -8,6 +8,7 @@ import 'package:flutter/material.dart';
 import '../model/memory.dart';
 import '../theme/tokens.dart';
 import 'common.dart';
+import 'icons.dart';
 
 /// 打开记忆弹窗（跟模型、编辑一样，是弹窗不是全屏）。
 Future<void> showMemoryDialog(
@@ -138,7 +139,11 @@ class _MemoryPanelState extends State<MemoryPanel> {
       child: Row(
         children: <Widget>[
           if (widget.onBack != null)
-            JoButton(text: '← 返回', onTap: widget.onBack!),
+            JoIconAction(
+              icon: JoIcons.arrowLeft,
+              tip: '返回',
+              onTap: widget.onBack!,
+            ),
           const SizedBox(width: JoSpace.s3),
           Text(
             _effectiveOwner.isEmpty ? '上帝记忆' : '$_effectiveOwner 的记忆',

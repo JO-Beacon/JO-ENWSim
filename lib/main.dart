@@ -107,18 +107,53 @@ class _JoEnwsAppState extends State<JoEnwsApp>
     value: _settings.isDark ? 1 : 0,
   );
 
+  /// 现在实际用哪一套：跟随系统就看系统主题，否则看用户选的。
+  ///
+  /// 取系统主题用 `platformBrightness`——它就是操作系统那个
+  /// “深色 / 浅色”设置（Windows：个性化 → 颜色 → 选择模式）。
+  bool get _effectiveDark {
+    if (!_settings.followSystem) return _settings.isDark;
+    return WidgetsBinding.instance.platformDispatcher.platformBrightness ==
+        Brightness.dark;
+  }
+
+  /// 把动画推到当前该在的位置。关掉动画就一步到位（启动时用）。
+  void _syncTheme({bool animate = true}) {
+    final bool dark = _effectiveDark;
+    final double target = dark ? 1 : 0;
+    if (!animate) {
+      _themeAnim.value = target;
+      return;
+    }
+    if (target == _themeAnim.value) return;
+    if (dark) {
+      _themeAnim.forward();
+    } else {
+      _themeAnim.reverse();
+    }
+  }
+
   /// 原生窗口（只有 Windows 那边有；其它平台没有这条通道）。
   static const MethodChannel _windowChannel = MethodChannel('joenws/window');
 
   @override
   void initState() {
     super.initState();
+    // 启动时先对到正确的那一套（不播动画）。
+    _syncTheme(animate: false);
     _pushCaption();
     _themeAnim.addListener(_pushCaption);
+    // 系统主题变了就自己跟上——不然得重启才跟。
+    WidgetsBinding.instance.platformDispatcher.onPlatformBrightnessChanged =
+        () {
+      if (_settings.followSystem) _syncTheme();
+    };
   }
 
   @override
   void dispose() {
+    WidgetsBinding.instance.platformDispatcher.onPlatformBrightnessChanged =
+        null;
     _themeAnim.removeListener(_pushCaption);
     _themeAnim.dispose();
     super.dispose();
@@ -148,14 +183,8 @@ class _JoEnwsAppState extends State<JoEnwsApp>
   }
 
   void _update(JoSettings next) {
-    if (next.isDark != _settings.isDark) {
-      if (next.isDark) {
-        _themeAnim.forward();
-      } else {
-        _themeAnim.reverse();
-      }
-    }
     setState(() => _settings = next);
+    _syncTheme();
     widget.store.save(next);
   }
 
@@ -166,7 +195,9 @@ class _JoEnwsAppState extends State<JoEnwsApp>
 
   @override
   Widget build(BuildContext context) {
-    final JoPalette palette = _settings.palette;
+    // 给界面的那套，直接用动画当前的位置算——过渡期间也是平滑的。
+    final JoPalette palette =
+        JoPalette.lerp(JoPalette.light, JoPalette.dark, _themeAnim.value);
     return MaterialApp(
       title: 'JO-ENWSim',
       debugShowCheckedModeBanner: false,
@@ -176,7 +207,8 @@ class _JoEnwsAppState extends State<JoEnwsApp>
         scaffoldBackgroundColor: palette.bg,
         colorScheme: ColorScheme.fromSeed(
           seedColor: palette.accent,
-          brightness: _settings.isDark ? Brightness.dark : Brightness.light,
+          brightness:
+              _effectiveDark ? Brightness.dark : Brightness.light,
         ),
       ),
       builder: (BuildContext context, Widget? child) {

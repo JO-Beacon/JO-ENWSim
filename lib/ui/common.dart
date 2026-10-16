@@ -2,6 +2,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
 import '../theme/tokens.dart';
+import 'icons.dart';
 
 /// 可点区域的动效基元：hover / 按下。builder 拿到状态自己画。
 /// 极简风格用得很克制：120ms、只改底色和描边。
@@ -54,6 +55,65 @@ class _JoTapState extends State<JoTap> {
 const Duration kJoTapMs = Duration(milliseconds: 120);
 
 /// 可点文字（细线边框可选）。
+/// 一个只有图标的动作（工具栏、返回键）。
+///
+/// 悬停 / 按下：底色浮起（文字色 9% / 20%），图标从次要色亮到正文色。
+/// 不做描边——那是“每个图标一个小盒子”，界面里别的工具栏不是那样。
+///
+/// [inverted] 是实底强调色 + 底色图标，给主行动用（比如发送）。
+class JoIconAction extends StatelessWidget {
+  const JoIconAction({
+    super.key,
+    required this.icon,
+    required this.onTap,
+    this.tip,
+    this.size = 16,
+    this.inverted = false,
+  });
+
+  final IconData icon;
+
+  /// 名字。现在只给代码看（还没做悬停提示），将来要用就在这儿。
+  final String? tip;
+
+  final VoidCallback onTap;
+  final double size;
+
+  /// 反色：实底强调色 + 底色图标。主行动用。
+  final bool inverted;
+
+  @override
+  Widget build(BuildContext context) {
+    final JoPalette p = JoTheme.of(context);
+    return JoTap(
+      onTap: onTap,
+      opaque: false,
+      builder: (BuildContext c, bool hover, bool down) {
+        final double a = down ? 0.20 : (hover ? 0.09 : 0.0);
+        // 反色的底色：往正文色那一侧混，所以暗主题会变亮、亮主题会变深 ——
+        // 两边都是“更醒目”。直接混背景色会反掉。
+        final Color bgColor = inverted
+            ? Color.alphaBlend(
+                p.text.withValues(alpha: hover || down ? 0.28 : 0.0),
+                p.accent,
+              )
+            : p.icon.withValues(alpha: a);
+        final Color fgColor = inverted
+            ? p.bg
+            : ((hover || down) ? p.text : p.icon);
+        return AnimatedContainer(
+          duration: kJoTapMs,
+          curve: Curves.easeOut,
+          // 内边距**四边一样**。写成一宽一窄，图标在框里就是偏的。
+          padding: const EdgeInsets.all(6),
+          decoration: BoxDecoration(color: bgColor),
+          child: Icon(icon, size: size, color: fgColor),
+        );
+      },
+    );
+  }
+}
+
 class JoButton extends StatelessWidget {
   const JoButton({
     super.key,
@@ -273,7 +333,8 @@ class JoPageHeader extends StatelessWidget {
       decoration: BoxDecoration(border: Border(bottom: JoShape.side(p.border))),
       child: Row(
         children: <Widget>[
-          JoButton(text: '← 返回', onTap: onBack, color: p.accent),
+          // 返回键：从文字换成图标（左上那支左箭头）。
+          JoIconAction(icon: JoIcons.arrowLeft, tip: '返回', onTap: onBack),
           const SizedBox(width: JoSpace.s4),
           Text(
             title,

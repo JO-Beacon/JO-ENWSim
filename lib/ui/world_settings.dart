@@ -738,7 +738,9 @@ class _Area extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final JoSettings s = JoTheme.settingsOf(context);
-    final JoPalette p = s.palette;
+    // 不用 s.palette —— 那个 getter 已经被删了（它算不出跟随系统）。
+    // 实际用哪一套只有 main 知道，要就拿 JoTheme 里那份。
+    final JoPalette p = JoTheme.of(context);
     return Container(
       padding: const EdgeInsets.symmetric(
         horizontal: JoSpace.s3,
