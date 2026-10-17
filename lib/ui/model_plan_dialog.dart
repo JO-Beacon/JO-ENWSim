@@ -140,8 +140,10 @@ class _PickerDialog extends StatelessWidget {
                       child: Text(
                         '还没有可用的模型\n先去 设置 → 服务商 配一个',
                         textAlign: TextAlign.center,
-                        style: JoFonts.meta
-                            .copyWith(color: p.secondary, height: 1.8),
+                        style: JoFonts.meta.copyWith(
+                          color: p.secondary,
+                          height: 1.8,
+                        ),
                       ),
                     )
                   : ListView(
@@ -165,7 +167,8 @@ class _PickerDialog extends StatelessWidget {
                               context,
                               p,
                               label: id,
-                              on: current ==
+                              on:
+                                  current ==
                                   ModelPick(
                                     providerId: g.providerId,
                                     modelId: id,
@@ -233,8 +236,8 @@ class _PickerDialog extends StatelessWidget {
             color: on
                 ? p.surface
                 : (hover
-                    ? p.surface.withValues(alpha: 0.5)
-                    : Colors.transparent),
+                      ? p.surface.withValues(alpha: 0.5)
+                      : Colors.transparent),
             border: JoShape.border(on || hover ? p.accent : Colors.transparent),
             borderRadius: JoShape.br,
           ),
@@ -293,9 +296,7 @@ class _PlanDialogState extends State<_PlanDialog> {
     );
     if (!mounted) return;
     setState(() {
-      _plan = _plan.copyWith(
-        defaultRef: pick?.key ?? '',
-      );
+      _plan = _plan.copyWith(defaultRef: pick?.key ?? '');
     });
   }
 
@@ -497,10 +498,7 @@ class _PlanDialogState extends State<_PlanDialog> {
             ),
           ),
           const SizedBox(width: JoSpace.s3),
-          JoButton(
-            text: '取消',
-            onTap: () => Navigator.of(context).pop(),
-          ),
+          JoButton(text: '取消', onTap: () => Navigator.of(context).pop()),
           const SizedBox(width: JoSpace.s2),
           JoButton(
             text: '保存',

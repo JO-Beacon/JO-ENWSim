@@ -84,9 +84,10 @@ class _MemoryPanelState extends State<MemoryPanel> {
       widget.books[_effectiveOwner] ?? MemoryBook(ownerId: _effectiveOwner);
 
   void _put(MemoryBook next) {
-    widget.onChanged(
-      <String, MemoryBook>{...widget.books, _effectiveOwner: next},
-    );
+    widget.onChanged(<String, MemoryBook>{
+      ...widget.books,
+      _effectiveOwner: next,
+    });
   }
 
   void _putEntry(MemoryEntry old, MemoryEntry next) {
@@ -101,18 +102,16 @@ class _MemoryPanelState extends State<MemoryPanel> {
   }
 
   void _add() => _put(
-        _book.copyWith(
-          entries: <MemoryEntry>[..._book.entries, newMemoryEntry()],
-        ),
-      );
+    _book.copyWith(entries: <MemoryEntry>[..._book.entries, newMemoryEntry()]),
+  );
 
   void _remove(MemoryEntry e) => _put(
-        _book.copyWith(
-          entries: _book.entries
-              .where((MemoryEntry x) => !identical(x, e))
-              .toList(),
-        ),
-      );
+    _book.copyWith(
+      entries: _book.entries
+          .where((MemoryEntry x) => !identical(x, e))
+          .toList(),
+    ),
+  );
 
   @override
   Widget build(BuildContext context) {
@@ -166,12 +165,7 @@ class _MemoryPanelState extends State<MemoryPanel> {
   /// 谁：上帝 + 各角色。上帝记忆不受信息隔离约束，这里如实标出来。
   Widget _owners(JoPalette p) {
     return Padding(
-      padding: const EdgeInsets.fromLTRB(
-        JoSpace.s4,
-        0,
-        JoSpace.s4,
-        JoSpace.s3,
-      ),
+      padding: const EdgeInsets.fromLTRB(JoSpace.s4, 0, JoSpace.s4, JoSpace.s3),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.stretch,
         children: <Widget>[
@@ -281,8 +275,7 @@ class _MemoryPanelState extends State<MemoryPanel> {
                   initial: e.kind,
                   hint: '类型（自己写）',
                   compact: true,
-                  onChanged: (String v) =>
-                      _putEntry(e, e.copyWith(kind: v)),
+                  onChanged: (String v) => _putEntry(e, e.copyWith(kind: v)),
                 ),
               ),
               const SizedBox(width: JoSpace.s2),
@@ -305,10 +298,7 @@ class _MemoryPanelState extends State<MemoryPanel> {
           const SizedBox(height: JoSpace.s2),
           Text(
             '${e.source.label} · ${_when(e.updatedAt)}',
-            style: JoFonts.meta.copyWith(
-              color: p.secondary,
-              fontSize: 10,
-            ),
+            style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
           ),
         ],
       ),

@@ -7,9 +7,53 @@
 /// 流程里的一步。设置页的提示词框与模型配置共用这一份。
 typedef StepKind = ({String id, String title, String hint});
 
-/// 流程图里的七步。
+/// 每一步的**默认提示词**。
+///
+/// 为什么要有这份：设置 → 引擎 里那些框如果是空的，用户就
+/// **看不见、也改不了**引擎到底在跟模型说什么 —— 那等于暗地里另用一套。
+/// 所以：框里默认显示这里的内容，用户改了存起来，引擎读存的那份。
+///
+/// 这里写的只是**这一步的任务**。世界观、角色卡、最近的历史、
+/// 输出格式那些公共部分由引擎自己拼，不进这些框。
+const Map<String, String> kDefaultPrompts = <String, String>{
+  'A0':
+      '判断这条序列要不要裂成两条。'
+      '如果两头已经各走各的、再放一起已经说不通，就该裂；'
+      '否则保持原样。把判断与一句理由写出来。',
+  'AD':
+      '判断本回合该做哪一件：\n'
+      '  env  = 环境更新（推进世界自身的事件：昼夜、天气、火势、人群）\n'
+      '  turn = 角色回合（某个角色行动一次）\n'
+      '没有外部规则，你自己看当前情势定。',
+  'A1':
+      '把世界自身的事件往前推一步。'
+      '不要写任何角色的主动行为——那是角色回合的事。'
+      '时间标签用文本（比如“入夜之后”），不要用时间戳。',
+  'A2': '判断这一步有资格行动的角色。只从给出的角色里选，名字要一模一样。',
+  'A3':
+      '据每个参与角色各自感知到的内容，'
+      '挑唯一一个该行动的角色。只能从参与者里挑。',
+  'A4':
+      '判断这条序列要不要和别的序列合并。'
+      '两边已经汇到同一处、分开写反而零碎，就该合；否则保持原样。'
+      '把判断与一句理由写出来。',
+  'B1':
+      '写出这个角色此刻感知到了什么。'
+      '只能写它能知道的：看得见、听得见、摸得着的。'
+      '不要写它的想法或决定（那是下一步的事），也不要写别人的内心。',
+  'B2':
+      '写出这个角色这一步的行为。'
+      '一行到几句话，写它做了什么、说了什么，不要写别人的反应。'
+      '时间标签用文本，不要用时间戳。',
+};
+
+/// 这一步默认的提示词（没有就是空串）。
+String kDefaultPromptOf(String id) => kDefaultPrompts[id] ?? '';
+
+/// 流程图里的八步（含 A 决策）。
 const List<StepKind> kSteps = <StepKind>[
   (id: 'A0', title: '是否分裂序列', hint: '判断这条序列要不要裂成两条'),
+  (id: 'AD', title: '这一步做什么', hint: '环境更新（世界自己动）还是角色回合（某个角色行动）'),
   (id: 'A1', title: '环境更新', hint: '把世界自身的事件推进到当前时刻'),
   (id: 'A2', title: '框选参与的角色', hint: '本回合有资格行动的角色'),
   (id: 'A3', title: '框选唯一的角色', hint: '从参与角色里挑出唯一的那个去行动'),
@@ -67,10 +111,7 @@ class ModelPlan {
   /// 这一步实际用的键（还没轮到全局默认）。
   String stepKey(String id) => byStep[id] ?? '';
 
-  ModelPlan copyWith({
-    String? defaultRef,
-    Map<String, String>? byStep,
-  }) =>
+  ModelPlan copyWith({String? defaultRef, Map<String, String>? byStep}) =>
       ModelPlan(
         defaultRef: defaultRef ?? this.defaultRef,
         byStep: byStep ?? this.byStep,
@@ -87,9 +128,9 @@ class ModelPlan {
   }
 
   Map<String, Object?> toJson() => <String, Object?>{
-        'defaultRef': defaultRef,
-        'byStep': byStep,
-      };
+    'defaultRef': defaultRef,
+    'byStep': byStep,
+  };
 
   static ModelPlan fromJson(Map<String, Object?> j) {
     final Object? raw = j['byStep'];
@@ -97,8 +138,7 @@ class ModelPlan {
       defaultRef: '${j['defaultRef'] ?? ''}',
       byStep: raw is Map
           ? raw.map(
-              (Object? k, Object? v) =>
-                  MapEntry<String, String>('$k', '$v'),
+              (Object? k, Object? v) => MapEntry<String, String>('$k', '$v'),
             )
           : const <String, String>{},
     );

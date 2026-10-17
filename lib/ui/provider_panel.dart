@@ -55,17 +55,19 @@ class _ProviderPanelState extends State<ProviderPanel> {
     final List<Provider> list = q.isEmpty
         ? widget.providers
         : widget.providers
-            .where(
-              (Provider p) =>
-                  p.name.toLowerCase().contains(q) ||
-                  p.groupName.toLowerCase().contains(q),
-            )
-            .toList();
+              .where(
+                (Provider p) =>
+                    p.name.toLowerCase().contains(q) ||
+                    p.groupName.toLowerCase().contains(q),
+              )
+              .toList();
     final List<({String name, List<Provider> items})> out =
         <({String name, List<Provider> items})>[];
     for (final Provider p in list) {
       final String g = p.groupName;
-      final int i = out.indexWhere((({String name, List<Provider> items}) e) => e.name == g);
+      final int i = out.indexWhere(
+        (({String name, List<Provider> items}) e) => e.name == g,
+      );
       if (i >= 0) {
         out[i].items.add(p);
       } else {
@@ -89,7 +91,10 @@ class _ProviderPanelState extends State<ProviderPanel> {
   }
 
   Future<void> _add() async {
-    final Provider? p = await showAddProviderDialog(context, presets: widget.presets);
+    final Provider? p = await showAddProviderDialog(
+      context,
+      presets: widget.presets,
+    );
     if (p == null || !mounted) return;
     // 重名就自动加序号：第二个 DeepSeek 叫 “DeepSeek 2”。
     final Set<String> names = <String>{
@@ -103,10 +108,7 @@ class _ProviderPanelState extends State<ProviderPanel> {
       }
       name = '${p.name} $i';
     }
-    widget.onChanged(<Provider>[
-      ...widget.providers,
-      p.copyWith(name: name),
-    ]);
+    widget.onChanged(<Provider>[...widget.providers, p.copyWith(name: name)]);
     setState(() => _selectedId = p.id);
   }
 
@@ -134,28 +136,19 @@ class _ProviderPanelState extends State<ProviderPanel> {
 
   /// 存档有问题时的提示。只说事实，不做任何补救动作。
   Widget _loadNote(JoPalette p, String text) => Padding(
-        padding: const EdgeInsets.fromLTRB(
-          JoSpace.s3,
-          JoSpace.s3,
-          JoSpace.s3,
-          0,
-        ),
-        child: Text(
-          text,
-          style: JoFonts.meta.copyWith(
-            color: p.accent,
-            fontSize: 10,
-            height: 1.6,
-          ),
-        ),
-      );
+    padding: const EdgeInsets.fromLTRB(JoSpace.s3, JoSpace.s3, JoSpace.s3, 0),
+    child: Text(
+      text,
+      style: JoFonts.meta.copyWith(color: p.accent, fontSize: 10, height: 1.6),
+    ),
+  );
 
   Widget _empty(JoPalette p) => Center(
-        child: Text(
-          '还没有服务商，点左下角“＋ 添加”',
-          style: JoFonts.meta.copyWith(color: p.secondary),
-        ),
-      );
+    child: Text(
+      '还没有服务商，点左下角“＋ 添加”',
+      style: JoFonts.meta.copyWith(color: p.secondary),
+    ),
+  );
 
   // —— 左：列表 ——
 
@@ -211,10 +204,7 @@ class _ProviderPanelState extends State<ProviderPanel> {
     );
   }
 
-  List<Widget> _group(
-    JoPalette p,
-    ({String name, List<Provider> items}) g,
-  ) {
+  List<Widget> _group(JoPalette p, ({String name, List<Provider> items}) g) {
     final bool open = !_collapsed.contains(g.name);
     return <Widget>[
       Padding(
@@ -305,7 +295,9 @@ class _ProviderPanelState extends State<ProviderPanel> {
             decoration: BoxDecoration(
               color: on
                   ? p.surface
-                  : (hover ? p.surface.withValues(alpha: 0.55) : Colors.transparent),
+                  : (hover
+                        ? p.surface.withValues(alpha: 0.55)
+                        : Colors.transparent),
               border: JoShape.border(
                 on ? p.accent : (hover ? p.border : Colors.transparent),
               ),
@@ -416,10 +408,7 @@ class _ProviderPanelState extends State<ProviderPanel> {
               _label(p, '接口'),
               if (x.custom == null)
                 // 预设来的：端点是死的事实，只读。
-                Text(
-                  x.endpoint,
-                  style: JoFonts.meta.copyWith(color: p.text),
-                )
+                Text(x.endpoint, style: JoFonts.meta.copyWith(color: p.text))
               else ...<Widget>[
                 JoInput(
                   initial: x.baseUrl,
@@ -433,18 +422,15 @@ class _ProviderPanelState extends State<ProviderPanel> {
                   onChanged: (String v) => _replace(x.copyWith(apiPath: v)),
                 ),
               ],
-              if (x.protocol.wire == Wire.openai && x.custom == null)
-                ...<Widget>[
+              if (x.protocol.wire == Wire.openai &&
+                  x.custom == null) ...<Widget>[
                 const SizedBox(height: JoSpace.s4),
                 Row(
                   children: <Widget>[
                     Expanded(
                       child: Text(
                         'Use Responses API',
-                        style: JoFonts.ui.copyWith(
-                          fontSize: 13,
-                          color: p.text,
-                        ),
+                        style: JoFonts.ui.copyWith(fontSize: 13, color: p.text),
                       ),
                     ),
                     JoToggle(
@@ -492,49 +478,49 @@ class _ProviderPanelState extends State<ProviderPanel> {
   ///
   /// 表头先摆出来，条目结构与属性（语言 / 性别 / 风格）等定了再填。
   Widget _voices(JoPalette p) => Column(
-        crossAxisAlignment: CrossAxisAlignment.stretch,
-        children: <Widget>[
-          _label(p, '音色 0'),
-          Text(
-            '音色定义在服务里，角色那边只存“用哪个”。'
-            '条目属性（语言 / 性别 / 风格之类）还没定，定完就照模型清单的样子做。',
-            style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
-          ),
-        ],
-      );
+    crossAxisAlignment: CrossAxisAlignment.stretch,
+    children: <Widget>[
+      _label(p, '音色 0'),
+      Text(
+        '音色定义在服务里，角色那边只存“用哪个”。'
+        '条目属性（语言 / 性别 / 风格之类）还没定，定完就照模型清单的样子做。',
+        style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+      ),
+    ],
+  );
 
   /// DeepSeek 专属开关。
   ///
   /// 只把规则摊开，不给默认档位：要不要开思考、投入多高，都是用户自己定。
   List<Widget> _deepseek(JoPalette p, Provider x) => <Widget>[
-        _label(p, '端点格式'),
-        JoSegment<String>(
-          options: const <({String label, String value})>[
-            (label: 'OpenAI 格式', value: 'openai'),
-            (label: 'Anthropic 格式', value: 'anthropic'),
-          ],
-          value: x.protocol == Protocol.deepseekAnthropic
-              ? 'anthropic'
-              : 'openai',
-          onChanged: (String v) {
-            final Protocol next = v == 'anthropic'
-                ? Protocol.deepseekAnthropic
-                : Protocol.deepseek;
-            _replace(x.copyWith(
-              protocol: next,
-              baseUrl: next.baseUrl,
-              apiPath: next.apiPath,
-            ));
-          },
-        ),
-        const SizedBox(height: JoSpace.s5),
-        _note(
-          p,
-          '输入按缓存命中与未命中分别计价，命中便宜约 50 倍；'
-          '前缀越稳定越容易命中，所以稳定的内容放前面、每回合变的放最后',
-        ),
-        _note(p, '峰时（北京时间 09:00–12:00、14:00–18:00 的工作日）是谷时的两倍'),
-      ];
+    _label(p, '端点格式'),
+    JoSegment<String>(
+      options: const <({String label, String value})>[
+        (label: 'OpenAI 格式', value: 'openai'),
+        (label: 'Anthropic 格式', value: 'anthropic'),
+      ],
+      value: x.protocol == Protocol.deepseekAnthropic ? 'anthropic' : 'openai',
+      onChanged: (String v) {
+        final Protocol next = v == 'anthropic'
+            ? Protocol.deepseekAnthropic
+            : Protocol.deepseek;
+        _replace(
+          x.copyWith(
+            protocol: next,
+            baseUrl: next.baseUrl,
+            apiPath: next.apiPath,
+          ),
+        );
+      },
+    ),
+    const SizedBox(height: JoSpace.s5),
+    _note(
+      p,
+      '输入按缓存命中与未命中分别计价，命中便宜约 50 倍；'
+      '前缀越稳定越容易命中，所以稳定的内容放前面、每回合变的放最后',
+    ),
+    _note(p, '峰时（北京时间 09:00–12:00、14:00–18:00 的工作日）是谷时的两倍'),
+  ];
 
   /// 模型行点开后展开的内容。
   ///
@@ -578,38 +564,38 @@ class _ProviderPanelState extends State<ProviderPanel> {
 
   /// 声明里的一行：左边名字，右边值。
   Widget _cap(JoPalette p, String name, String value) => Padding(
-        padding: const EdgeInsets.only(bottom: 2),
-        child: Row(
-          crossAxisAlignment: CrossAxisAlignment.start,
-          children: <Widget>[
-            SizedBox(
-              width: 80,
-              child: Text(
-                name,
-                style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
-              ),
-            ),
-            Expanded(
-              child: Text(
-                value.trim().isEmpty ? '—' : value,
-                style: JoFonts.meta.copyWith(color: p.text, fontSize: 10),
-              ),
-            ),
-          ],
-        ),
-      );
-
-  Widget _note(JoPalette p, String text) => Padding(
-        padding: const EdgeInsets.only(top: JoSpace.s2),
-        child: Text(
-          text,
-          style: JoFonts.meta.copyWith(
-            color: p.secondary,
-            fontSize: 10,
-            height: 1.7,
+    padding: const EdgeInsets.only(bottom: 2),
+    child: Row(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        SizedBox(
+          width: 80,
+          child: Text(
+            name,
+            style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
           ),
         ),
-      );
+        Expanded(
+          child: Text(
+            value.trim().isEmpty ? '—' : value,
+            style: JoFonts.meta.copyWith(color: p.text, fontSize: 10),
+          ),
+        ),
+      ],
+    ),
+  );
+
+  Widget _note(JoPalette p, String text) => Padding(
+    padding: const EdgeInsets.only(top: JoSpace.s2),
+    child: Text(
+      text,
+      style: JoFonts.meta.copyWith(
+        color: p.secondary,
+        fontSize: 10,
+        height: 1.7,
+      ),
+    ),
+  );
 
   /// 删除服务商前问一句。它下面的模型和 Key 会一起没。
   Future<void> _confirmDelete(Provider x) async {
@@ -888,12 +874,12 @@ class _ProviderPanelState extends State<ProviderPanel> {
   }
 
   Widget _label(JoPalette p, String text) => Padding(
-        padding: const EdgeInsets.only(bottom: JoSpace.s2),
-        child: Text(
-          text,
-          style: JoFonts.meta.copyWith(color: p.secondary, letterSpacing: 1),
-        ),
-      );
+    padding: const EdgeInsets.only(bottom: JoSpace.s2),
+    child: Text(
+      text,
+      style: JoFonts.meta.copyWith(color: p.secondary, letterSpacing: 1),
+    ),
+  );
 }
 
 /// 占位头像（还没有各家图标，先用首字母方块）。
@@ -1004,17 +990,12 @@ class _SearchBox extends StatelessWidget {
         border: JoShape.border(p.border),
         borderRadius: JoShape.br,
       ),
-      child: TextField(
+      child: JoTextField(
         controller: controller,
         onChanged: (_) => onChanged(),
         style: JoFonts.ui.copyWith(fontSize: 13, color: p.text),
-        cursorColor: p.accent,
-        decoration: InputDecoration(
-          isDense: true,
-          border: InputBorder.none,
-          hintText: '搜索服务商或分组',
-          hintStyle: JoFonts.ui.copyWith(fontSize: 13, color: p.secondary),
-        ),
+        hint: '搜索服务商或分组',
+        hintStyle: JoFonts.ui.copyWith(fontSize: 13, color: p.secondary),
       ),
     );
   }
@@ -1067,18 +1048,15 @@ class _KeyFieldState extends State<_KeyField> {
                   border: JoShape.border(p.border),
                   borderRadius: JoShape.br,
                 ),
-                child: TextField(
+                child: JoTextField(
                   controller: _c,
                   obscureText: !_show,
                   onChanged: widget.onEdit,
                   style: JoFonts.ui.copyWith(fontSize: 13, color: p.text),
-                  cursorColor: p.accent,
-                  decoration: InputDecoration(
-                    isDense: true,
-                    border: InputBorder.none,
-                    hintText: 'sk-…',
-                    hintStyle:
-                        JoFonts.ui.copyWith(fontSize: 13, color: p.secondary),
+                  hint: 'sk-…',
+                  hintStyle: JoFonts.ui.copyWith(
+                    fontSize: 13,
+                    color: p.secondary,
                   ),
                 ),
               ),
@@ -1233,10 +1211,7 @@ class _RenameGroupDialogState extends State<_RenameGroupDialog> {
             Row(
               mainAxisAlignment: MainAxisAlignment.end,
               children: <Widget>[
-                JoButton(
-                  text: '取消',
-                  onTap: () => Navigator.of(context).pop(),
-                ),
+                JoButton(text: '取消', onTap: () => Navigator.of(context).pop()),
                 const SizedBox(width: JoSpace.s3),
                 JoButton(text: '确定', onTap: _ok, color: p.accent),
               ],

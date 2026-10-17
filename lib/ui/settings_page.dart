@@ -24,6 +24,8 @@ class SettingsPage extends StatefulWidget {
     required this.onGlobalPlanChanged,
     this.servicesNote,
     this.globalPlanNote,
+    this.prompts = const <String, String>{},
+    this.onPromptsChanged,
     required this.keys,
     required this.onKeysChanged,
     required this.onBack,
@@ -43,6 +45,12 @@ class SettingsPage extends StatefulWidget {
   /// 快捷键：动作 id → 键位字符串。
   final Map<String, String> keys;
   final ValueChanged<Map<String, String>> onKeysChanged;
+
+  /// 引擎的提示词（设置 → 引擎里那几步）。缺的已用默认补上。
+  ///
+  /// **引擎读的就是这份** —— 界面上看见什么，引擎就用什么。
+  final Map<String, String> prompts;
+  final ValueChanged<Map<String, String>>? onPromptsChanged;
   final List<Provider> providers;
   final ValueChanged<List<Provider>> onProvidersChanged;
   final VoidCallback onBack;
@@ -143,8 +151,7 @@ class _SettingsPageState extends State<SettingsPage> {
     final String key = stepId.isEmpty
         ? widget.globalPlan.defaultRef
         : widget.globalPlan.stepKey(stepId);
-    final String value =
-        modelKeyLabel(modelGroupsOf(widget.providers), key);
+    final String value = modelKeyLabel(modelGroupsOf(widget.providers), key);
     return _modelRowBox(
       p,
       title: title,
@@ -185,15 +192,18 @@ class _SettingsPageState extends State<SettingsPage> {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Text(title,
-                        style:
-                            JoFonts.ui.copyWith(fontSize: 13, color: p.text)),
+                    Text(
+                      title,
+                      style: JoFonts.ui.copyWith(fontSize: 13, color: p.text),
+                    ),
                     const SizedBox(height: 2),
                     Text(
                       hint,
                       overflow: TextOverflow.ellipsis,
-                      style: JoFonts.meta
-                          .copyWith(color: p.secondary, fontSize: 10),
+                      style: JoFonts.meta.copyWith(
+                        color: p.secondary,
+                        fontSize: 10,
+                      ),
                     ),
                   ],
                 ),
@@ -223,8 +233,21 @@ class _SettingsPageState extends State<SettingsPage> {
   void initState() {
     super.initState();
     for (final ({String id, String title, String hint}) p in _prompts) {
-      _promptC[p.id] = TextEditingController();
+      // 框里**显示默认值**，不是空的 —— 看不见提示词就等于改不了它。
+      final TextEditingController c = TextEditingController(
+        text: widget.prompts[p.id] ?? kDefaultPromptOf(p.id),
+      );
+      // 边打边存：不用另加保存按钮，也不会“关掉就丢”。
+      c.addListener(_savePrompts);
+      _promptC[p.id] = c;
     }
+  }
+
+  void _savePrompts() {
+    widget.onPromptsChanged?.call(<String, String>{
+      for (final MapEntry<String, TextEditingController> e in _promptC.entries)
+        e.key: e.value.text,
+    });
   }
 
   @override
@@ -253,14 +276,11 @@ class _SettingsPageState extends State<SettingsPage> {
                   child: AnimatedSwitcher(
                     duration: const Duration(milliseconds: 160),
                     // 必须给紧约束：默认那个松散 Stack 会把短内容居中。
-                    layoutBuilder:
-                        (Widget? current, List<Widget> previous) => Stack(
-                      fit: StackFit.expand,
-                      children: <Widget>[
-                        ...previous,
-                        ?current,
-                      ],
-                    ),
+                    layoutBuilder: (Widget? current, List<Widget> previous) =>
+                        Stack(
+                          fit: StackFit.expand,
+                          children: <Widget>[...previous, ?current],
+                        ),
                     transitionBuilder: (Widget child, Animation<double> a) =>
                         FadeTransition(opacity: a, child: child),
                     child: KeyedSubtree(
@@ -304,7 +324,9 @@ class _SettingsPageState extends State<SettingsPage> {
                   decoration: BoxDecoration(
                     color: on
                         ? p.surface
-                        : (hover ? p.surface.withValues(alpha: 0.5) : Colors.transparent),
+                        : (hover
+                              ? p.surface.withValues(alpha: 0.5)
+                              : Colors.transparent),
                     border: JoShape.border(on || hover ? p.accent : p.border),
                     borderRadius: JoShape.br,
                   ),
@@ -350,8 +372,7 @@ class _SettingsPageState extends State<SettingsPage> {
                 JoTap(
                   onTap: () => setState(() => _lang = l.tag),
                   builder: (BuildContext c, bool hover, bool down) => Padding(
-                    padding:
-                        const EdgeInsets.symmetric(vertical: JoSpace.s2),
+                    padding: const EdgeInsets.symmetric(vertical: JoSpace.s2),
                     child: Row(
                       children: <Widget>[
                         SizedBox(
@@ -505,7 +526,8 @@ class _SettingsPageState extends State<SettingsPage> {
                     SizedBox(
                       width: 18,
                       // 空 = 没设，不是“认不出”
-                      child: (widget.keys[k.id] ?? '').trim().isNotEmpty &&
+                      child:
+                          (widget.keys[k.id] ?? '').trim().isNotEmpty &&
                               joActivator(widget.keys[k.id] ?? '') == null
                           ? Text(
                               '认不出',
@@ -551,10 +573,7 @@ class _SettingsPageState extends State<SettingsPage> {
             ),
           ],
           const SizedBox(height: JoSpace.s5),
-          JoSection(
-            title: '全局默认模型',
-            children: _globalModels(p),
-          ),
+          JoSection(title: '全局默认模型', children: _globalModels(p)),
           const SizedBox(height: JoSpace.s5),
           for (final ({String id, String title, String hint}) pr in _prompts)
             _prompt(p, pr.title, pr.hint, _promptC[pr.id]!),
@@ -713,19 +732,19 @@ class _SettingsPageState extends State<SettingsPage> {
       PageRouteBuilder<void>(
         transitionDuration: const Duration(milliseconds: 160),
         reverseTransitionDuration: const Duration(milliseconds: 160),
-        pageBuilder: (
-          BuildContext c,
-          Animation<double> primary,
-          Animation<double> secondary,
-        ) =>
-            const LicensesPage(),
-        transitionsBuilder: (
-          BuildContext c,
-          Animation<double> a,
-          Animation<double> secondary,
-          Widget child,
-        ) =>
-            FadeTransition(opacity: a, child: child),
+        pageBuilder:
+            (
+              BuildContext c,
+              Animation<double> primary,
+              Animation<double> secondary,
+            ) => const LicensesPage(),
+        transitionsBuilder:
+            (
+              BuildContext c,
+              Animation<double> a,
+              Animation<double> secondary,
+              Widget child,
+            ) => FadeTransition(opacity: a, child: child),
       ),
     );
   }

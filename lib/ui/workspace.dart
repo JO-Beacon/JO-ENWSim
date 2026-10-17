@@ -2,10 +2,15 @@ import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
+import '../data/world_store.dart';
+import '../engine/engine.dart';
 import '../model/demo.dart';
+import '../model/turn.dart';
 import '../model/char_choices.dart';
+import '../model/llm_client.dart';
 import '../model/memory.dart';
 import '../model/model_plan.dart';
+import '../model/pack_rows.dart';
 import '../model/provider.dart';
 import '../model/shortcuts.dart';
 import '../theme/tokens.dart';
@@ -20,10 +25,6 @@ import 'settings_page.dart';
 // —— 画布几何 ——
 const double _rulerW = 58; // 左侧步号
 const double _padX = 16;
-const double _gap = 28; // 列间空隙
-const double _headerH = 56;
-const double _cardH = 92;
-const double _cardGap = 34; // 行间空隙
 const double _wCompact = 260;
 const double _wFocus = 540;
 const double _wShrunk = 150;
@@ -44,6 +45,11 @@ class Workspace extends StatefulWidget {
     this.globalPlanNote,
     this.keys = const <String, String>{},
     this.onKeysChanged,
+    required this.store,
+    this.worlds = const <World>[],
+    this.worldsNote,
+    this.prompts = const <String, String>{},
+    this.onPromptsChanged,
   });
 
   /// 全局模型默认（设置 → 引擎里那两级）。
@@ -60,6 +66,19 @@ class Workspace extends StatefulWidget {
 
   final JoSettings settings;
   final ValueChanged<JoSettings> onSettingsChanged;
+
+  /// 世界和回合存在这儿。界面上改了什么都要写回去。
+  final WorldStore store;
+
+  /// 打开时从库里读出来的世界。
+  final List<World> worlds;
+
+  /// 世界存档读不出来时的一句话（如实说，不藏）。
+  final String? worldsNote;
+
+  /// 引擎的提示词（设置 → 引擎）。引擎真的读它。
+  final Map<String, String> prompts;
+  final ValueChanged<Map<String, String>>? onPromptsChanged;
   final List<Provider> providers;
   final ValueChanged<List<Provider>> onProvidersChanged;
 
@@ -74,8 +93,8 @@ class _WorkspaceState extends State<Workspace>
   Size _viewport = Size.zero;
 
   _Page _page = _Page.main;
-  late final List<World> _worlds = List<World>.of(DemoData.worlds);
-  String _worldId = DemoData.worlds.first.id;
+  late List<World> _worlds = List<World>.of(widget.worlds);
+  late String _worldId = _worlds.isEmpty ? '' : _worlds.first.id;
   double _railW = 196;
   double _sideW = 300;
 
@@ -95,6 +114,9 @@ class _WorkspaceState extends State<Workspace>
   /// 推进方式。**默认冻结** —— 不动它就不会自己跑。
   /// 现在只记着这个选择，真正的推进要引擎。
   String _mode = '冻结';
+
+  /// 引擎在跑吗。「单步」跑一圈的期间为 true。
+  bool _engineBusy = false;
 
   /// 角色的「选择」（采样策略 / 最大输出 / 流式 / 推理档位 / JSON）。
   /// 按世界分，世界里再按角色名分——**每个角色各有一套**。
@@ -134,41 +156,16 @@ class _WorkspaceState extends State<Workspace>
     return null;
   }
 
-  SeqEvent? get _selectedEvent {
+  TurnStep? get _selectedEvent {
     final SeqLane? lane = _focusedLane;
     if (lane == null || _selected == null) return null;
     if (_selected! < 0 || _selected! >= lane.events.length) return null;
     return lane.events[_selected!];
   }
 
-  /// 排版：每条序列的事件各占一行。
-  /// **换地点线要经过的格子必须留空**：不够就把后面的事件整列下移（插空行）。
-  Map<String, List<int>> get _rows {
-    final Map<String, List<int>> rows = <String, List<int>>{};
-    for (final SeqLane l in _world.lanes) {
-      rows[l.id] = <int>[for (int i = 0; i < l.events.length; i++) i];
-    }
-    for (int iter = 0; iter < 64; iter++) {
-      bool changed = false;
-      for (final MoveLink m in _world.moves) {
-        final List<int>? src = rows[m.fromLane];
-        final List<int>? dst = rows[m.toLane];
-        if (src == null || dst == null) continue;
-        if (m.fromStep >= src.length || m.toStep >= dst.length) continue;
-        // 竖段从源卡底走到目标行上方那条空隙；源列中间不能有卡
-        if (dst[m.toStep] > src[m.fromStep] + 1 &&
-            m.fromStep + 1 < src.length &&
-            src[m.fromStep + 1] < dst[m.toStep]) {
-          for (int k = m.fromStep + 1; k < src.length; k++) {
-            src[k] += 1;
-          }
-          changed = true;
-        }
-      }
-      if (!changed) break;
-    }
-    return rows;
-  }
+  /// 排版：每条序列的事件各占一行，且换地点线要经过的格子留空。
+  /// 算法在 `packRows`（`model/pack_rows.dart`）里，那边能直接单元测试。
+  Map<String, List<int>> get _rows => packRows(_world.lanes, _world.moves);
 
   int get _maxRows {
     int max = 1;
@@ -179,7 +176,56 @@ class _WorkspaceState extends State<Workspace>
     return max;
   }
 
-  double get _rowH => _cardH + _cardGap;
+  double get _rowH => kRowH;
+
+  /// 选中的那张卡要额外多高：**按正文量出来**，不钉死。
+  ///
+  /// 量不出（没选 / 找不到）就是 0，跟原来一样。
+  double get _selExtra {
+    final String? laneId = _focused;
+    final int? idx = _selected;
+    if (laneId == null || idx == null) return 0;
+    final SeqLane? lane = _world.lanes
+        .where((SeqLane x) => x.id == laneId)
+        .firstOrNull;
+    if (lane == null || idx < 0 || idx >= lane.events.length) return 0;
+
+    final JoPalette p = JoTheme.of(context);
+    final double w = _colW(laneId) - JoSpace.s4 * 2;
+    // 正文以外的东西全部**实量**：内边距、顶行（谁 + 时间）、行间距、边框。
+    // 不拿一个估计的数字蒙。
+    const double pad = JoSpace.s4; // 选中时不是 compact，用 s4
+    final double bodyW = w;
+    final TextPainter bodyTp = TextPainter(
+      text: TextSpan(
+        text: lane.events[idx].text,
+        style: widget.settings.bodyStyle(p.text),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: bodyW);
+
+    final TextPainter rowTp = TextPainter(
+      text: TextSpan(
+        text: '${lane.events[idx].who}  ${lane.events[idx].time}',
+        style: JoFonts.meta.copyWith(color: p.text),
+      ),
+      textDirection: TextDirection.ltr,
+    )..layout(maxWidth: bodyW);
+
+    final double total =
+        bodyTp.height + rowTp.height + JoSpace.s3 + pad * 2 + 2;
+    return total > kCardH ? total - kCardH : 0;
+  }
+
+  /// 选中那一步在第几行（没有就是 -1）。
+  int get _selRow {
+    final String? lane = _focused;
+    final int? idx = _selected;
+    if (lane == null || idx == null) return -1;
+    final List<int>? rows = _rows[lane];
+    if (rows == null || idx < 0 || idx >= rows.length) return -1;
+    return rows[idx];
+  }
 
   /// 列宽。聚焦过渡中，卡片、表头、**底层连线**都是用这个值算的，
   /// 所以它们会一起动，不会错位。
@@ -197,7 +243,7 @@ class _WorkspaceState extends State<Workspace>
     double x = _rulerW + _padX;
     for (final SeqLane l in _world.lanes) {
       map[l.id] = x;
-      x += _colW(l.id) + _gap;
+      x += _colW(l.id) + kGap;
     }
     return map;
   }
@@ -205,14 +251,17 @@ class _WorkspaceState extends State<Workspace>
   double get _totalW {
     double x = _rulerW + _padX;
     for (final SeqLane l in _world.lanes) {
-      x += _colW(l.id) + _gap;
+      x += _colW(l.id) + kGap;
     }
     return x;
   }
 
-  double get _totalH => _headerH + _maxRows * _rowH + _padBottom;
+  double get _totalH =>
+      kHeaderH + _maxRows * _rowH + _padBottom + (_selRow >= 0 ? _selExtra : 0);
 
-  double _rowTop(int i) => _headerH + i * _rowH;
+  // 选中那行之后整体下移，免得拉高的卡片盖住下面的。
+  double _rowTop(int i) =>
+      kHeaderH + i * _rowH + (i > _selRow && _selRow >= 0 ? _selExtra : 0);
 
   void _pickWorld(String id) {
     setState(() {
@@ -227,6 +276,7 @@ class _WorkspaceState extends State<Workspace>
     if (w == null || !mounted) return;
     setState(() {
       _worlds.add(w);
+      widget.store.saveWorld(w);
       _worldId = w.id;
       _focused = null;
       _selected = null;
@@ -300,12 +350,9 @@ class _WorkspaceState extends State<Workspace>
       globalPlan: widget.globalPlan,
       groups: _modelGroups,
       books: _memory[_world.id] ?? const <String, MemoryBook>{},
-      owners: <String>[
-        for (final CharCard c in _world.characters) c.name,
-      ],
+      owners: <String>[for (final CharCard c in _world.characters) c.name],
       characters: _world.characters,
-      charModels:
-          _charModel[_world.id] ?? const <String, ModelPlan>{},
+      charModels: _charModel[_world.id] ?? const <String, ModelPlan>{},
       isLastWorld: _worlds.length <= 1,
     );
     if (r == null || !mounted) return;
@@ -313,6 +360,7 @@ class _WorkspaceState extends State<Workspace>
     setState(() {
       if (r.delete) {
         _worlds.removeWhere((World w) => w.id == id);
+        widget.store.deleteWorld(id);
         _plans.remove(id);
         _memory.remove(id);
         _choices.remove(id);
@@ -340,6 +388,8 @@ class _WorkspaceState extends State<Workspace>
           lanes: w.lanes,
           moves: w.moves,
         );
+        // 改完就落盘。
+        widget.store.saveWorld(_worlds[i]);
       }
     });
   }
@@ -372,11 +422,7 @@ class _WorkspaceState extends State<Workspace>
           if (m.enabled && m.id.trim().isNotEmpty) m.id,
       ];
       if (ids.isEmpty) continue;
-      out.add((
-        providerId: pv.id,
-        providerName: pv.name,
-        models: ids,
-      ));
+      out.add((providerId: pv.id, providerName: pv.name, models: ids));
     }
     return out;
   }
@@ -384,8 +430,7 @@ class _WorkspaceState extends State<Workspace>
   /// 发言框那张牌上写什么：这个世界默认用的模型。
   /// 世界默认没设就留空，交给全局默认（全局默认在设置里）。
   String get _worldModelLabel {
-    final ModelPick? pick =
-        ModelPick.of(_plans[_world.id]?.defaultRef ?? '');
+    final ModelPick? pick = ModelPick.of(_plans[_world.id]?.defaultRef ?? '');
     if (pick == null) return '';
     for (final Provider pv in widget.providers) {
       if (pv.id == pick.providerId) return '${pv.name} · ${pick.modelId}';
@@ -410,10 +455,10 @@ class _WorkspaceState extends State<Workspace>
     final String key = (charPlan?.stepKey('B2') ?? '').isNotEmpty
         ? charPlan!.stepKey('B2')
         : (worldPlan.stepKey('B2').isNotEmpty
-            ? worldPlan.stepKey('B2')
-            : (worldPlan.defaultRef.isNotEmpty
-                ? worldPlan.defaultRef
-                : widget.globalPlan.defaultRef));
+              ? worldPlan.stepKey('B2')
+              : (worldPlan.defaultRef.isNotEmpty
+                    ? worldPlan.defaultRef
+                    : widget.globalPlan.defaultRef));
     final ModelPick? pick = ModelPick.of(key);
     if (pick == null) return none;
 
@@ -456,9 +501,7 @@ class _WorkspaceState extends State<Workspace>
   Future<void> _pickChoices() async {
     final Map<String, CharChoices>? next = await showCharChoicesDialog(
       context,
-      characters: <String>[
-        for (final CharCard c in _world.characters) c.name,
-      ],
+      characters: <String>[for (final CharCard c in _world.characters) c.name],
       values: _choices[_world.id] ?? const <String, CharChoices>{},
       infoOf: _charInfo,
       onPickModel: _pickCharModel,
@@ -510,6 +553,9 @@ class _WorkspaceState extends State<Workspace>
             servicesNote: widget.servicesNote,
             globalPlanNote: widget.globalPlanNote,
             keys: widget.keys,
+            prompts: widget.prompts,
+            onPromptsChanged: (Map<String, String> next) =>
+                widget.onPromptsChanged?.call(next),
             onKeysChanged: (Map<String, String> next) =>
                 widget.onKeysChanged?.call(next),
             onBack: () => setState(() => _page = _Page.main),
@@ -525,17 +571,14 @@ class _WorkspaceState extends State<Workspace>
       child: Focus(
         autofocus: true,
         child: AnimatedSwitcher(
-      duration: const Duration(milliseconds: 160),
-      layoutBuilder: (Widget? current, List<Widget> previous) => Stack(
-        fit: StackFit.expand,
-        children: <Widget>[
-          ...previous,
-          ?current,
-        ],
-      ),
-      transitionBuilder: (Widget child, Animation<double> a) =>
-          FadeTransition(opacity: a, child: child),
-      child: body,
+          duration: const Duration(milliseconds: 160),
+          layoutBuilder: (Widget? current, List<Widget> previous) => Stack(
+            fit: StackFit.expand,
+            children: <Widget>[...previous, ?current],
+          ),
+          transitionBuilder: (Widget child, Animation<double> a) =>
+              FadeTransition(opacity: a, child: child),
+          child: body,
         ),
       ),
     );
@@ -558,6 +601,171 @@ class _WorkspaceState extends State<Workspace>
     put(JoKey.settings, () => setState(() => _page = _Page.settings));
     // 不绑 Esc —— 它是多功能键，只留给弹窗自己用。
     return out;
+  }
+
+  /// 「单步」：让引擎跑**一次完整流程**（A₀ → AD → A₁ 或角色回合 → A₄）。
+  ///
+  /// 跑完重新从库里读世界——回合已经写进 step 表了，界面跟着刷新就行。
+  Future<void> _runStepOnce() async {
+    final Provider? p = widget.providers
+        .where(
+          (Provider x) =>
+              x.enabled && x.apiKey.trim().isNotEmpty && x.models.isNotEmpty,
+        )
+        .firstOrNull;
+    if (p == null) {
+      _engineSay('还没有能用的服务商。\n去 设置 → 模型服务 里填一个 API Key。');
+      return;
+    }
+    if (_worlds.isEmpty) return;
+    final String laneId =
+        _focused ?? (_world.lanes.isEmpty ? '' : _world.lanes.first.id);
+    if (laneId.isEmpty) {
+      _engineSay('这个世界还没有地点，先加一个。');
+      return;
+    }
+
+    setState(() => _engineBusy = true);
+    try {
+      final Engine e = Engine(
+        EngineInput(
+          store: widget.store,
+          provider: p,
+          apiKey: p.apiKey,
+          world: _world,
+          laneId: laneId,
+          globalPlan: widget.globalPlan,
+          prompts: widget.prompts,
+          worldPlan: _plans[_world.id] ?? const ModelPlan(),
+          charPlans: _charModel[_world.id] ?? const <String, ModelPlan>{},
+          charChoices: _choices[_world.id] ?? const <String, CharChoices>{},
+          memories: (_memory[_world.id] ?? const <String, MemoryBook>{}).values
+              .toList(),
+        ),
+      );
+      final List<TurnStep> out = await e.runTurn();
+      if (!mounted) return;
+      // 重新读库：回合已经落盘了。
+      final WorldsLoad r = widget.store.loadWorlds();
+      setState(() => _worlds = r.worlds);
+
+      // 把**新的那一步**指出来：选中它、聚焦那条序列——
+      // 否则画布上多了一行，用户不知道哪行是新的。
+      final TurnStep? fresh = out
+          .where((TurnStep x) => x.showsOnCanvas)
+          .lastOrNull;
+      int freshIndex = -1;
+      if (fresh != null) {
+        for (final SeqLane l in _world.lanes) {
+          if (l.id != laneId) continue;
+          freshIndex = l.events.length - 1;
+          if (freshIndex >= 0) {
+            setState(() {
+              _focused = l.id;
+              _selected = freshIndex;
+              _animId = l.id;
+            });
+            _focusAnim.forward();
+          }
+          break;
+        }
+      }
+
+      final String body = _summaryOf(out);
+      _engineSay(
+        freshIndex >= 0 ? '新增的是第 ${freshIndex + 1} 步（已在画布上选中）。\n\n$body' : body,
+      );
+    } catch (err) {
+      if (mounted) _engineSay('引擎出错：$err');
+    } finally {
+      if (mounted) setState(() => _engineBusy = false);
+    }
+  }
+
+  /// 把一回合的每一步写成给人看的一段。
+  ///
+  /// 判断（A0 / AD / A2 / A3 / A4）不上画布，但**必须能看见** ——
+  /// 否则引擎跑完，用户不知道它在想什么。
+  String _summaryOf(List<TurnStep> steps) {
+    final StringBuffer b = StringBuffer();
+    for (final TurnStep s in steps) {
+      final String who = s.who.isEmpty ? '' : ' · ${s.who}';
+      b.writeln('【${s.kind}$who】');
+      if (s.judgment.isNotEmpty) b.writeln('  判断：${s.judgment}');
+      if (s.candidates.isNotEmpty) b.writeln('  参与：${s.candidates.join('、')}');
+      if (s.chosen.isNotEmpty) b.writeln('  选中：${s.chosen}');
+      if (s.perceptions.isNotEmpty) {
+        for (final MapEntry<String, String> e in s.perceptions.entries) {
+          b.writeln('  ${e.key} 感知：${e.value}');
+        }
+      }
+      if (s.text.isNotEmpty) b.writeln('  正文：${s.text}');
+      if (!s.ok) b.writeln('  错误：${s.error}');
+      final LlmUsage? u = s.usage;
+      if (u != null) {
+        b.writeln('  用量：入 ${u.input} · 出 ${u.output} · 命中 ${u.cacheHit}');
+      }
+      b.writeln();
+    }
+    return b.toString().trimRight();
+  }
+
+  /// 改完正文存回去。
+  ///
+  /// [index] 是**画布上的步序**（只有 A1 / B2 上画布），跟 step 表里
+  /// 用同样的过滤顺序对应。
+  void _saveStepText(String laneId, int index, String text) {
+    widget.store.updateStepText(_world.id, laneId, index, text);
+    final WorldsLoad r = widget.store.loadWorlds();
+    setState(() => _worlds = r.worlds);
+  }
+
+  /// 把一句话说给用户听。用我们自己的弹窗样式，不走 Material。
+  void _engineSay(String text) {
+    if (!mounted) return;
+    showDialog<void>(
+      context: context,
+      builder: (BuildContext c) {
+        final JoPalette p = JoTheme.of(c);
+        return Dialog(
+          backgroundColor: p.bg,
+          shape: const RoundedRectangleBorder(),
+          child: ConstrainedBox(
+            constraints: const BoxConstraints(maxWidth: 520),
+            child: Padding(
+              padding: const EdgeInsets.all(JoSpace.s4),
+              child: Column(
+                mainAxisSize: MainAxisSize.min,
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  // 内容可能很长（一整回合），所以要能滚。
+                  Flexible(
+                    child: SingleChildScrollView(
+                      child: SelectableText(
+                        text,
+                        style: JoFonts.ui.copyWith(
+                          fontSize: 13,
+                          color: p.text,
+                          height: 1.7,
+                        ),
+                      ),
+                    ),
+                  ),
+                  const SizedBox(height: JoSpace.s4),
+                  Align(
+                    alignment: Alignment.centerRight,
+                    child: JoButton(
+                      text: '知道了',
+                      onTap: () => Navigator.of(c).maybePop(),
+                    ),
+                  ),
+                ],
+              ),
+            ),
+          ),
+        );
+      },
+    );
   }
 
   Widget _mainPage() {
@@ -597,8 +805,12 @@ class _WorkspaceState extends State<Workspace>
                 _TopBar(
                   palette: p,
                   worldName: _world.name,
-                  mode: _mode,
-                  onMode: (String v) => setState(() => _mode = v),
+                  mode: _engineBusy ? '跑着……' : _mode,
+                  onMode: (String v) {
+                    setState(() => _mode = v);
+                    // 「单步」不是选个模式就完了：它是让引擎**跑一次**。
+                    if (v == '单步') _runStepOnce();
+                  },
                   modeKey: _modeKey,
                   onHistory: _openHistory,
                 ),
@@ -609,15 +821,15 @@ class _WorkspaceState extends State<Workspace>
                 ),
                 // 没有玩家角色的话，下面这一整套（模型 / 选择 / 工具 / 输入框）都不摆。
                 if (_world.playerName.isNotEmpty) ...<Widget>[
-                _ComposeBar(
-                  palette: p,
-                  model: _worldModelLabel,
-                  onChoices: _pickChoices,
-                  onPickModel: _pickModel,
-                ),
-                // 输入框只在**这个世界有玩家角色**时出现。
-                // 没有玩家角色 = 一切交给 AI，人不用说话。
-                _InputBar(
+                  _ComposeBar(
+                    palette: p,
+                    model: _worldModelLabel,
+                    onChoices: _pickChoices,
+                    onPickModel: _pickModel,
+                  ),
+                  // 输入框只在**这个世界有玩家角色**时出现。
+                  // 没有玩家角色 = 一切交给 AI，人不用说话。
+                  _InputBar(
                     palette: p,
                     settings: widget.settings,
                     controller: _input,
@@ -656,6 +868,7 @@ class _WorkspaceState extends State<Workspace>
                     palette: p,
                     settings: widget.settings,
                     world: _world,
+                    onEditText: _saveStepText,
                     focusedLane: _focusedLane,
                     selectedEvent: _selectedEvent,
                     selectedIndex: _selected,
@@ -666,10 +879,7 @@ class _WorkspaceState extends State<Workspace>
                   ),
                 ),
                 // 常驻按钮；编辑与记忆都走弹窗。
-                WorldEditButton(
-                  palette: p,
-                  onTap: _openEdit,
-                ),
+                WorldEditButton(palette: p, onTap: _openEdit),
               ],
             ),
           ),
@@ -745,8 +955,7 @@ class _WorkspaceState extends State<Workspace>
               constrained: false,
               panEnabled: true,
               scaleEnabled: false,
-              boundaryMargin:
-                  const EdgeInsets.only(right: 480, bottom: 480),
+              boundaryMargin: const EdgeInsets.only(right: 480, bottom: 480),
               // 聚焦展开的动画：卡片 / 表头 / 底层连线都在这里重建，
               // 用的是同一份插值后的列宽，所以不会错位。
               child: AnimatedBuilder(
@@ -764,10 +973,13 @@ class _WorkspaceState extends State<Workspace>
                               palette: p,
                               colX: colX,
                               colW: _colW,
-                              headerH: _headerH,
-                              cardH: _cardH,
+                              headerH: kHeaderH,
+                              cardH: kCardH,
                               rowH: _rowH,
-                              gap: _gap,
+                              selRow: _selRow,
+                              selLane: _focused,
+                              selExtra: _selExtra,
+                              gap: kGap,
                               maxRows: _maxRows,
                               rows: _rows,
                               rulerW: _rulerW,
@@ -800,7 +1012,7 @@ class _WorkspaceState extends State<Workspace>
           left: colX[lane.id]!,
           top: 10,
           width: _colW(lane.id),
-          height: _headerH - 14,
+          height: kHeaderH - 14,
           child: JoTap(
             onTap: () => _focusLane(lane.id),
             builder: (BuildContext context, bool hover, bool down) {
@@ -830,8 +1042,9 @@ class _WorkspaceState extends State<Workspace>
                         style: JoFonts.ui.copyWith(
                           fontSize: 13,
                           color: on || lane.here ? p.accent : p.text,
-                          fontWeight:
-                              lane.here ? FontWeight.w700 : FontWeight.w400,
+                          fontWeight: lane.here
+                              ? FontWeight.w700
+                              : FontWeight.w400,
                         ),
                       ),
                     ),
@@ -857,18 +1070,20 @@ class _WorkspaceState extends State<Workspace>
     for (final SeqLane lane in _world.lanes) {
       final List<int> r = _rows[lane.id]!;
       for (int i = 0; i < lane.events.length; i++) {
+        final bool on = _focused == lane.id && _selected == i;
         out.add(
           Positioned(
             left: colX[lane.id]!,
             top: _rowTop(r[i]),
             width: _colW(lane.id),
-            height: _cardH,
+            // 选中的那张拉高 —— 否则正文看不全（卡片高固定 92）。
+            height: on ? kCardH + _selExtra : kCardH,
             child: _StepCard(
               palette: p,
               settings: widget.settings,
               event: lane.events[i],
               focused: _focused == lane.id,
-              selected: _focused == lane.id && _selected == i,
+              selected: on,
               onTap: () => _focusLane(lane.id, index: i),
             ),
           ),
@@ -876,6 +1091,65 @@ class _WorkspaceState extends State<Workspace>
       }
     }
     return out;
+  }
+}
+
+/// 正文编辑框。
+///
+/// 用 `EditableText`（项目一直用它，不用 Material 的 TextField）。
+/// **失焦时**把改后的文字交回去 —— 没有保存按钮，也不会“关掉就丢”。
+class _BodyEditor extends StatefulWidget {
+  const _BodyEditor({
+    required this.text,
+    required this.style,
+    required this.onDone,
+  });
+
+  final String text;
+  final TextStyle style;
+  final ValueChanged<String> onDone;
+
+  @override
+  State<_BodyEditor> createState() => _BodyEditorState();
+}
+
+class _BodyEditorState extends State<_BodyEditor> {
+  late final TextEditingController _c = TextEditingController(
+    text: widget.text,
+  );
+  final FocusNode _f = FocusNode();
+
+  @override
+  void initState() {
+    super.initState();
+    _f.addListener(() {
+      if (!_f.hasFocus && _c.text != widget.text) widget.onDone(_c.text);
+    });
+  }
+
+  @override
+  void dispose() {
+    _c.dispose();
+    _f.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final JoPalette p = JoTheme.of(context);
+    return Container(
+      padding: const EdgeInsets.all(JoSpace.s2),
+      decoration: BoxDecoration(border: Border.all(color: p.border)),
+      child: EditableText(
+        controller: _c,
+        focusNode: _f,
+        maxLines: null,
+        style: widget.style,
+        cursorColor: p.accent,
+        backgroundCursorColor: p.border,
+        selectionColor: p.accent.withValues(alpha: 0.3),
+      ),
+    );
   }
 }
 
@@ -893,6 +1167,7 @@ class _TopBar extends StatelessWidget {
 
   final JoPalette palette;
   final String worldName;
+
   /// 推进方式：冻结（默认，谁都不动）/ 单步 / 智能 / 全自动。
   final String mode;
   final ValueChanged<String> onMode;
@@ -965,71 +1240,71 @@ void _openRunModeMenu(
         width: size.width,
         height: size.height,
         child: Stack(
-        children: <Widget>[
-          // 点外面就收起
-          Positioned.fill(
-            child: GestureDetector(
-              behavior: HitTestBehavior.opaque,
-              onTap: close,
-              child: const SizedBox.shrink(),
-            ),
-          ),
-          Positioned(
-            // 贴在按钮下沿
-            top: at.dy + boxSize.height + 6,
-            left: at.dx,
-            child: Container(
-              padding: const EdgeInsets.all(JoSpace.s1),
-              decoration: BoxDecoration(
-                color: p.bg,
-                border: JoShape.border(p.border),
-                borderRadius: JoShape.br,
+          children: <Widget>[
+            // 点外面就收起
+            Positioned.fill(
+              child: GestureDetector(
+                behavior: HitTestBehavior.opaque,
+                onTap: close,
+                child: const SizedBox.shrink(),
               ),
-              child: Column(
-                mainAxisSize: MainAxisSize.min,
-                // 这里**不能**用 stretch：Positioned 只给了 top/right，
-                // 宽度是无约束的，"拉伸"就等于拉伸到无限宽 → 断言 + 撑不出尺寸。
-                // 让它按内容自适应就行。
-                children: <Widget>[
-                  for (final String m in _WorkspaceState.kRunModes)
-                    JoTap(
-                      onTap: () {
-                        close();
-                        onPick(m);
-                      },
-                      opaque: false,
-                      builder: (BuildContext context, bool hover, bool down) {
-                        final bool on = m == value;
-                        return AnimatedContainer(
-                          duration: kJoTapMs,
-                          curve: Curves.easeOut,
-                          padding: const EdgeInsets.symmetric(
-                            horizontal: JoSpace.s3,
-                            vertical: JoSpace.s2,
-                          ),
-                          decoration: BoxDecoration(
-                            color: on ? p.surface : Colors.transparent,
-                            border: JoShape.border(
-                              on || hover ? p.accent : Colors.transparent,
-                            ),
-                            borderRadius: JoShape.br,
-                          ),
-                          child: AnimatedDefaultTextStyle(
+            ),
+            Positioned(
+              // 贴在按钮下沿
+              top: at.dy + boxSize.height + 6,
+              left: at.dx,
+              child: Container(
+                padding: const EdgeInsets.all(JoSpace.s1),
+                decoration: BoxDecoration(
+                  color: p.bg,
+                  border: JoShape.border(p.border),
+                  borderRadius: JoShape.br,
+                ),
+                child: Column(
+                  mainAxisSize: MainAxisSize.min,
+                  // 这里**不能**用 stretch：Positioned 只给了 top/right，
+                  // 宽度是无约束的，"拉伸"就等于拉伸到无限宽 → 断言 + 撑不出尺寸。
+                  // 让它按内容自适应就行。
+                  children: <Widget>[
+                    for (final String m in _WorkspaceState.kRunModes)
+                      JoTap(
+                        onTap: () {
+                          close();
+                          onPick(m);
+                        },
+                        opaque: false,
+                        builder: (BuildContext context, bool hover, bool down) {
+                          final bool on = m == value;
+                          return AnimatedContainer(
                             duration: kJoTapMs,
                             curve: Curves.easeOut,
-                            style: JoFonts.meta.copyWith(
-                              color: on ? p.accent : p.secondary,
+                            padding: const EdgeInsets.symmetric(
+                              horizontal: JoSpace.s3,
+                              vertical: JoSpace.s2,
                             ),
-                            child: Text(m),
-                          ),
-                        );
-                      },
-                    ),
-                ],
+                            decoration: BoxDecoration(
+                              color: on ? p.surface : Colors.transparent,
+                              border: JoShape.border(
+                                on || hover ? p.accent : Colors.transparent,
+                              ),
+                              borderRadius: JoShape.br,
+                            ),
+                            child: AnimatedDefaultTextStyle(
+                              duration: kJoTapMs,
+                              curve: Curves.easeOut,
+                              style: JoFonts.meta.copyWith(
+                                color: on ? p.accent : p.secondary,
+                              ),
+                              child: Text(m),
+                            ),
+                          );
+                        },
+                      ),
+                  ],
+                ),
               ),
             ),
-          ),
-        ],
+          ],
         ),
       );
     },
@@ -1081,15 +1356,13 @@ class _WorldRail extends StatelessWidget {
               children: <Widget>[
                 Text(
                   '世界',
-                  style: JoFonts.meta
-                      .copyWith(color: p.secondary, letterSpacing: 2),
+                  style: JoFonts.meta.copyWith(
+                    color: p.secondary,
+                    letterSpacing: 2,
+                  ),
                 ),
                 const Spacer(),
-                JoButton(
-                  text: '＋ 新建世界',
-                  onTap: onNew,
-                  color: p.accent,
-                ),
+                JoButton(text: '＋ 新建世界', onTap: onNew, color: p.accent),
               ],
             ),
           ),
@@ -1208,7 +1481,10 @@ class _WorldTile extends StatelessWidget {
                 Text(
                   world.note,
                   overflow: TextOverflow.ellipsis,
-                  style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
+                  style: JoFonts.meta.copyWith(
+                    color: p.secondary,
+                    fontSize: 10,
+                  ),
                 ),
               ],
             ),
@@ -1230,20 +1506,25 @@ class _SidePanel extends StatelessWidget {
     required this.selectedEvent,
     required this.selectedIndex,
     required this.onClear,
+    required this.onEditText,
   });
 
   final JoPalette palette;
   final JoSettings settings;
   final World world;
   final SeqLane? focusedLane;
-  final SeqEvent? selectedEvent;
+  final TurnStep? selectedEvent;
   final int? selectedIndex;
   final VoidCallback onClear;
+
+  /// 右栏改了正文之后交回给上层（存库 + 刷新）。
+  /// 参数：序列 id、画布上的步序、新正文。
+  final void Function(String laneId, int index, String text) onEditText;
 
   @override
   Widget build(BuildContext context) {
     final JoPalette p = palette;
-    final SeqEvent? e = selectedEvent;
+    final TurnStep? e = selectedEvent;
     final SeqLane? lane = focusedLane;
 
     return Container(
@@ -1263,8 +1544,10 @@ class _SidePanel extends StatelessWidget {
                 Expanded(
                   child: Text(
                     e != null ? '这一步' : (lane != null ? '这个地点' : '这个世界'),
-                    style: JoFonts.meta
-                        .copyWith(color: p.secondary, letterSpacing: 2),
+                    style: JoFonts.meta.copyWith(
+                      color: p.secondary,
+                      letterSpacing: 2,
+                    ),
                   ),
                 ),
                 if (e != null || lane != null)
@@ -1274,7 +1557,10 @@ class _SidePanel extends StatelessWidget {
                       onTap: onClear,
                       child: MouseRegion(
                         cursor: SystemMouseCursors.click,
-                        child: Text('×', style: JoFonts.meta.copyWith(color: p.secondary)),
+                        child: Text(
+                          '×',
+                          style: JoFonts.meta.copyWith(color: p.secondary),
+                        ),
                       ),
                     ),
                   ),
@@ -1290,9 +1576,12 @@ class _SidePanel extends StatelessWidget {
                 JoSpace.s4,
               ),
               children: <Widget>[
-                if (e != null) ..._stepDetail(p, lane!, e)
-                else if (lane != null) ..._laneDetail(p, lane)
-                else ..._worldDetail(p),
+                if (e != null)
+                  ..._stepDetail(p, lane!, e)
+                else if (lane != null)
+                  ..._laneDetail(p, lane)
+                else
+                  ..._worldDetail(p),
               ],
             ),
           ),
@@ -1301,7 +1590,7 @@ class _SidePanel extends StatelessWidget {
     );
   }
 
-  List<Widget> _stepDetail(JoPalette p, SeqLane lane, SeqEvent e) {
+  List<Widget> _stepDetail(JoPalette p, SeqLane lane, TurnStep e) {
     return <Widget>[
       _kv(p, '谁', e.who),
       _kv(p, '时间标签', e.time),
@@ -1310,13 +1599,54 @@ class _SidePanel extends StatelessWidget {
       const SizedBox(height: JoSpace.s4),
       Text('正文', style: JoFonts.meta.copyWith(color: p.secondary)),
       const SizedBox(height: JoSpace.s2),
-      Text(e.text, style: settings.bodyStyle(p.text)),
+      _BodyEditor(
+        text: e.text,
+        style: settings.bodyStyle(p.text),
+        onDone: (String v) => onEditText(lane.id, selectedIndex ?? 0, v),
+      ),
+      // —— 过程：框了谁、谁感知到什么、最后选中谁 ——
+      if (e.candidates.isNotEmpty) ...<Widget>[
+        const SizedBox(height: JoSpace.s4),
+        Text('候选参与', style: JoFonts.meta.copyWith(color: p.secondary)),
+        const SizedBox(height: JoSpace.s2),
+        Text(e.candidates.join('、'), style: settings.bodyStyle(p.text)),
+      ],
+      if (e.chosen.isNotEmpty) ...<Widget>[
+        const SizedBox(height: JoSpace.s4),
+        Text('选中', style: JoFonts.meta.copyWith(color: p.secondary)),
+        const SizedBox(height: JoSpace.s2),
+        Text(e.chosen, style: settings.bodyStyle(p.text)),
+      ],
+      if (e.perceptions.isNotEmpty) ...<Widget>[
+        const SizedBox(height: JoSpace.s4),
+        Text('感知', style: JoFonts.meta.copyWith(color: p.secondary)),
+        for (final MapEntry<String, String> m
+            in e.perceptions.entries) ...<Widget>[
+          const SizedBox(height: JoSpace.s3),
+          Text(m.key, style: JoFonts.meta.copyWith(color: p.text)),
+          const SizedBox(height: JoSpace.s1),
+          Text(m.value, style: settings.bodyStyle(p.text)),
+        ],
+      ],
+      if (e.judgment.isNotEmpty) ...<Widget>[
+        const SizedBox(height: JoSpace.s4),
+        Text('判断', style: JoFonts.meta.copyWith(color: p.secondary)),
+        const SizedBox(height: JoSpace.s2),
+        Text(e.judgment, style: settings.bodyStyle(p.text)),
+      ],
+      if (e.usage != null) ...<Widget>[
+        const SizedBox(height: JoSpace.s4),
+        Text(
+          '用量：入 ${e.usage!.input} · 出 ${e.usage!.output} · 命中 ${e.usage!.cacheHit}',
+          style: JoFonts.meta.copyWith(color: p.secondary),
+        ),
+      ],
     ];
   }
 
   List<Widget> _laneDetail(JoPalette p, SeqLane lane) {
     final List<String> who = <String>[];
-    for (final SeqEvent e in lane.events) {
+    for (final TurnStep e in lane.events) {
       if (!e.isNarration && !who.contains(e.who)) who.add(e.who);
     }
     return <Widget>[
@@ -1400,8 +1730,10 @@ class _SidePanel extends StatelessWidget {
                 if (c.persona.trim().isNotEmpty)
                   Text(
                     c.persona,
-                    style: JoFonts.meta
-                        .copyWith(color: p.secondary, height: 1.5),
+                    style: JoFonts.meta.copyWith(
+                      color: p.secondary,
+                      height: 1.5,
+                    ),
                   ),
               ],
             ),
@@ -1428,7 +1760,11 @@ class _SidePanel extends StatelessWidget {
           Expanded(
             child: Text(
               v,
-              style: JoFonts.ui.copyWith(color: p.text, fontSize: 12, height: 1.5),
+              style: JoFonts.ui.copyWith(
+                color: p.text,
+                fontSize: 12,
+                height: 1.5,
+              ),
             ),
           ),
         ],
@@ -1479,7 +1815,8 @@ class _VDragState extends State<_VDrag> {
       onExit: (_) => setState(() => _hover = false),
       child: GestureDetector(
         behavior: HitTestBehavior.opaque,
-        onHorizontalDragUpdate: (DragUpdateDetails d) => widget.onDrag(d.delta.dx),
+        onHorizontalDragUpdate: (DragUpdateDetails d) =>
+            widget.onDrag(d.delta.dx),
         child: SizedBox(
           width: 6,
           child: Center(
@@ -1511,7 +1848,7 @@ class _StepCard extends StatelessWidget {
 
   final JoPalette palette;
   final JoSettings settings;
-  final SeqEvent event;
+  final TurnStep event;
   final bool focused;
   final bool selected;
   final VoidCallback onTap;
@@ -1536,8 +1873,8 @@ class _StepCard extends StatelessWidget {
               selected
                   ? p.accent
                   : (event.isNarration
-                      ? p.accent.withValues(alpha: 0.4)
-                      : p.border),
+                        ? p.accent.withValues(alpha: 0.4)
+                        : p.border),
             ),
             borderRadius: JoShape.br,
           ),
@@ -1571,9 +1908,12 @@ class _StepCard extends StatelessWidget {
               Expanded(
                 child: Text(
                   event.text,
-                  style: settings.bodyStyle(p.text).copyWith(
-                        fontSize:
-                            compact ? settings.bodySize - 3 : settings.bodySize,
+                  style: settings
+                      .bodyStyle(p.text)
+                      .copyWith(
+                        fontSize: compact
+                            ? settings.bodySize - 3
+                            : settings.bodySize,
                       ),
                   maxLines: compact ? 2 : null,
                   overflow: compact ? TextOverflow.ellipsis : null,
@@ -1617,32 +1957,39 @@ class _ComposeBar extends StatelessWidget {
         vertical: JoSpace.s1 + 2,
       ),
       decoration: BoxDecoration(border: Border(top: JoShape.side(p.border))),
-      child: Row(
-        children: <Widget>[
-          JoButton(
-            text: '模型 · ${(model ?? '').trim().isEmpty ? '未选择' : model}',
-            onTap: onPickModel,
-            color: p.accent,
-          ),
-          const SizedBox(width: JoSpace.s2),
-          JoButton(text: '选择', onTap: onChoices, color: p.accent),
-          const SizedBox(width: JoSpace.s2),
-          Text(
-            '（还没接入）',
-            style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
-          ),
-          const Spacer(),
-          // 这四个从文字换成了图标。悬停浮底色、图标亮一档，不描边 ——
-          // 跟界面里其它工具栏一个做法。
-          for (final ({IconData icon, String tip}) act
-              in const <({IconData icon, String tip})>[
-            (icon: JoIcons.image, tip: '插入媒体'),
-            (icon: JoIcons.file, tip: '插入文件'),
-            (icon: JoIcons.camera, tip: '拍照'),
-            (icon: JoIcons.global, tip: '联网搜索'),
-          ])
-            JoIconAction(icon: act.icon, tip: act.tip, onTap: () {}),
-        ],
+      // 窄窗口下这一条会塞不下（实测 260px 就溢出）。
+      // 横向可滚 —— 比默默裁掉强。
+      // （下面 Row 的缩进没跟着改，dart format 会收拾。）
+      child: SingleChildScrollView(
+        scrollDirection: Axis.horizontal,
+        child: Row(
+          children: <Widget>[
+            JoButton(
+              text: '模型 · ${(model ?? '').trim().isEmpty ? '未选择' : model}',
+              onTap: onPickModel,
+              color: p.accent,
+            ),
+            const SizedBox(width: JoSpace.s2),
+            JoButton(text: '选择', onTap: onChoices, color: p.accent),
+            const SizedBox(width: JoSpace.s2),
+            Text(
+              '（还没接入）',
+              style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
+            ),
+            // 原先是 Spacer —— 横向滚动里没有约束，Spacer 会炸。
+            const SizedBox(width: JoSpace.s5),
+            // 这四个从文字换成了图标。悬停浮底色、图标亮一档，不描边 ——
+            // 跟界面里其它工具栏一个做法。
+            for (final ({IconData icon, String tip}) act
+                in const <({IconData icon, String tip})>[
+                  (icon: JoIcons.image, tip: '插入媒体'),
+                  (icon: JoIcons.file, tip: '插入文件'),
+                  (icon: JoIcons.camera, tip: '拍照'),
+                  (icon: JoIcons.global, tip: '联网搜索'),
+                ])
+              JoIconAction(icon: act.icon, tip: act.tip, onTap: () {}),
+          ],
+        ),
       ),
     );
   }
@@ -1741,8 +2088,7 @@ class _JoInputState extends State<_JoInput> {
         // 先被输入法吃掉，外面的全局绑定根本看不见它。所以别的组合键
         // 在这儿绑；发送键正好是 Enter 时**不重复绑**，免得送两次。
         final ShortcutActivator? a = joActivator(widget.sendKey);
-        final bool bareEnter =
-            widget.sendKey.trim().toLowerCase() == 'enter';
+        final bool bareEnter = widget.sendKey.trim().toLowerCase() == 'enter';
         return CallbackShortcuts(
           bindings: <ShortcutActivator, VoidCallback>{
             if (a != null && !bareEnter) a: widget.onSubmit,
@@ -1787,6 +2133,9 @@ class _CanvasPainter extends CustomPainter {
     required this.headerH,
     required this.cardH,
     required this.rowH,
+    this.selRow = -1,
+    this.selLane,
+    this.selExtra = 0,
     required this.gap,
     required this.maxRows,
     required this.rows,
@@ -1802,6 +2151,15 @@ class _CanvasPainter extends CustomPainter {
   final double headerH;
   final double cardH;
   final double rowH;
+
+  /// 被选中的那一行（-1 = 没有），以及它多出来的高度。
+  /// 拉高的卡片会把下面整体推下去，连线必须算进去，否则会穿在卡片中间。
+  final int selRow;
+
+  /// 拉高的是**哪一列**的卡。只有这一列在 [selRow] 上的那张卡多出 [selExtra]，
+  /// 别的列同行照旧 —— 不算这个，连线就会从别的列的卡底下方凭空开始。
+  final String? selLane;
+  final double selExtra;
   final double gap;
   final int maxRows;
   final Map<String, List<int>> rows;
@@ -1812,7 +2170,15 @@ class _CanvasPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    double rowTop(int i) => headerH + i * rowH;
+    double rowTop(int i) =>
+        headerH + i * rowH + (i > selRow && selRow >= 0 ? selExtra : 0);
+    // 卡片底边。**只有被聚焦那一列**的卡在选中行上被拉高了，底边才要多加
+    // selExtra；别的列同行是正常高度。早先这里只看行号不看列，于是别的列的
+    // 连线起点被抬高了 selExtra，竖段整段悬空、跟源卡断开。
+    double cardBottom(String laneId, int i) =>
+        rowTop(i) +
+        cardH +
+        (i == selRow && selRow >= 0 && laneId == selLane ? selExtra : 0);
     double colCenter(String id) => colX[id]! + colW(id) / 2;
 
     // —— 地点列底 ——
@@ -1855,7 +2221,7 @@ class _CanvasPainter extends CustomPainter {
       final List<int> r = rows[lane.id]!;
       for (int i = 0; i + 1 < lane.events.length; i++) {
         final double cx = colCenter(lane.id);
-        final double y0 = rowTop(r[i]) + cardH;
+        final double y0 = cardBottom(lane.id, r[i]);
         final double y1 = rowTop(r[i + 1]);
         canvas.drawLine(Offset(cx, y0), Offset(cx, y1 - 9), flow);
         _arrowDown(canvas, Offset(cx, y1), flow.color);
@@ -1868,7 +2234,8 @@ class _CanvasPainter extends CustomPainter {
       ..strokeWidth = 1.4
       ..style = PaintingStyle.stroke;
     for (final MoveLink m in moves) {
-      if (!colX.containsKey(m.fromLane) || !colX.containsKey(m.toLane)) continue;
+      if (!colX.containsKey(m.fromLane) || !colX.containsKey(m.toLane))
+        continue;
       final List<int>? sr = rows[m.fromLane];
       final List<int>? dr = rows[m.toLane];
       if (sr == null || dr == null) continue;
@@ -1876,7 +2243,7 @@ class _CanvasPainter extends CustomPainter {
 
       final double srcCx = colCenter(m.fromLane);
       final double dstCx = colCenter(m.toLane);
-      final double srcBottom = rowTop(sr[m.fromStep]) + cardH;
+      final double srcBottom = cardBottom(m.fromLane, sr[m.fromStep]);
       final double dstTop = rowTop(dr[m.toStep]);
 
       // 水平段走在目标行上方那条空隙里
@@ -1892,6 +2259,10 @@ class _CanvasPainter extends CustomPainter {
       );
       _arrowDown(canvas, Offset(dstCx, dstTop), move.color);
 
+      // 标签直接压在横线上：先垫一块跟列底同色的实底，再把字盖上去，
+      // 这样横线从字底下穿过而不是贴着字底边。
+      // 列底是 surface@55% 叠在 bg 上，填纯 bg 会露出一块更深的补丁，
+      // 所以垫底的颜色要按同样的叠法算出来。
       final TextPainter tp = TextPainter(
         text: TextSpan(
           text: '换地点',
@@ -1899,10 +2270,24 @@ class _CanvasPainter extends CustomPainter {
         ),
         textDirection: TextDirection.ltr,
       )..layout();
-      tp.paint(
-        canvas,
-        Offset((srcCx + dstCx) / 2 - tp.width / 2, yH - tp.height - 2),
+      final Offset labelAt = Offset(
+        (srcCx + dstCx) / 2 - tp.width / 2,
+        yH - tp.height / 2,
       );
+      canvas.drawRect(
+        Rect.fromLTWH(
+          labelAt.dx - 4,
+          labelAt.dy - 1,
+          tp.width + 8,
+          tp.height + 2,
+        ),
+        Paint()
+          ..color = Color.alphaBlend(
+            palette.surface.withValues(alpha: 0.55),
+            palette.bg,
+          ),
+      );
+      tp.paint(canvas, labelAt);
     }
   }
 
@@ -1925,6 +2310,9 @@ class _CanvasPainter extends CustomPainter {
       old.headerH != headerH ||
       old.cardH != cardH ||
       old.rowH != rowH ||
+      old.selRow != selRow ||
+      old.selLane != selLane ||
+      old.selExtra != selExtra ||
       old.maxRows != maxRows ||
       old.totalW != totalW ||
       old.colX.toString() != colX.toString() ||

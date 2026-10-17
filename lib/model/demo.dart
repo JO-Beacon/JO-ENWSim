@@ -1,24 +1,10 @@
+import 'turn.dart';
+
 // 序列 / 事件的数据模型，以及 demo 世界。
 // 序列 = 地点；每一步是“谁”做的一件事：人物（B）或旁白（A）。
-
-class SeqEvent {
-  const SeqEvent({
-    required this.who,
-    required this.time,
-    required this.text,
-  });
-
-  /// 谁：人物名（B）或“旁白”（A）
-  final String who;
-
-  /// 时间标签（**文本**，不是时间戳；只显示，不参与排版）
-  final String time;
-
-  /// 正文
-  final String text;
-
-  bool get isNarration => who == '旁白';
-}
+//
+// 一步一步的类型就是 [TurnStep]（在 turn.dart）—— 回合数据只有那一套，
+// 这里不再另立一个。
 
 /// 一条序列 = **一个地点**。
 class SeqLane {
@@ -38,7 +24,7 @@ class SeqLane {
   final bool here;
 
   /// 紧跟的每一步；下标 = 该地点的步序
-  final List<SeqEvent> events;
+  final List<TurnStep> events;
 }
 
 /// 换地点：人物从 fromLane 的第 fromStep 步，走到 toLane 的第 toStep 步。
@@ -122,32 +108,87 @@ class DemoData {
           id: 'l1',
           place: '地点1 · 正厅',
           here: true,
-          events: <SeqEvent>[
-            SeqEvent(who: '人物1', time: '雨夜', text: '正厅的灯亮着。人物1站在楼梯口，没有动。'),
-            SeqEvent(who: '人物2', time: '雨夜', text: '人物2从后门进来，凑到人物1耳边说了句什么。'),
-            SeqEvent(who: '人物4', time: '雨还在下', text: '门被推开。人物4进来，肩上全是雨。'),
-            SeqEvent(who: '人物3', time: '雨还在下', text: '人物3跟进来，把门带上，反手插了闩。'),
-            SeqEvent(who: '旁白', time: '雨还在下', text: '正厅里安静下来，只剩雨声。'),
+          events: <TurnStep>[
+            TurnStep(
+              kind: 'B2',
+              who: '人物1',
+              time: '雨夜',
+              text: '正厅的灯亮着。人物1站在楼梯口，没有动。',
+            ),
+            TurnStep(
+              kind: 'B2',
+              who: '人物2',
+              time: '雨夜',
+              text: '人物2从后门进来，凑到人物1耳边说了句什么。',
+            ),
+            TurnStep(
+              kind: 'B2',
+              who: '人物4',
+              time: '雨还在下',
+              text: '门被推开。人物4进来，肩上全是雨。',
+            ),
+            TurnStep(
+              kind: 'B2',
+              who: '人物3',
+              time: '雨还在下',
+              text: '人物3跟进来，把门带上，反手插了闩。',
+            ),
+            TurnStep(
+              kind: 'A1',
+              who: '旁白',
+              time: '雨还在下',
+              text: '正厅里安静下来，只剩雨声。',
+            ),
           ],
         ),
         SeqLane(
           id: 'l2',
           place: '地点2 · 仓房',
           here: false,
-          events: <SeqEvent>[
-            SeqEvent(who: '人物3', time: '入夜', text: '人物3在货架之间翻东西，翻得很轻，什么也没找到。他从后门出去，往后巷走了。'),
-            SeqEvent(who: '人物4', time: '入夜', text: '人物4推门进来说：我去正厅看看。'),
-            SeqEvent(who: '旁白', time: '入夜之后', text: '仓房又静下来。煤油味还在，比刚才重一点。'),
+          events: <TurnStep>[
+            TurnStep(
+              kind: 'B2',
+              who: '人物3',
+              time: '入夜',
+              text: '人物3在货架之间翻东西，翻得很轻，什么也没找到。他从后门出去，往后巷走了。',
+            ),
+            TurnStep(
+              kind: 'B2',
+              who: '人物4',
+              time: '入夜',
+              text: '人物4推门进来说：我去正厅看看。',
+            ),
+            TurnStep(
+              kind: 'A1',
+              who: '旁白',
+              time: '入夜之后',
+              text: '仓房又静下来。煤油味还在，比刚才重一点。',
+            ),
           ],
         ),
         SeqLane(
           id: 'l3',
           place: '地点3 · 后巷',
           here: false,
-          events: <SeqEvent>[
-            SeqEvent(who: '旁白', time: '夜半', text: '后巷已经空了，只剩墙根下一堆没点着的东西。'),
-            SeqEvent(who: '人物3', time: '夜半', text: '人物3从仓房后门绕到后巷，把墙根下的东西点着，转身往正厅去了。'),
-            SeqEvent(who: '旁白', time: '夜半之后', text: '火顺着墙往上爬。后巷开始亮起来。'),
+          events: <TurnStep>[
+            TurnStep(
+              kind: 'A1',
+              who: '旁白',
+              time: '夜半',
+              text: '后巷已经空了，只剩墙根下一堆没点着的东西。',
+            ),
+            TurnStep(
+              kind: 'B2',
+              who: '人物3',
+              time: '夜半',
+              text: '人物3从仓房后门绕到后巷，把墙根下的东西点着，转身往正厅去了。',
+            ),
+            TurnStep(
+              kind: 'A1',
+              who: '旁白',
+              time: '夜半之后',
+              text: '火顺着墙往上爬。后巷开始亮起来。',
+            ),
           ],
         ),
       ],

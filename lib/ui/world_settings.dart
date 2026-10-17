@@ -45,6 +45,7 @@ class WorldEditButton extends StatelessWidget {
 typedef WorldEditResult = ({
   String name,
   List<CharCard> characters,
+
   /// 每个角色一份模型配置（各自只管 B₁ / B₂）。
   /// 里面没设的，落回世界的 B₁/B₂，再落回世界默认。
   Map<String, ModelPlan> charModels,
@@ -52,6 +53,7 @@ typedef WorldEditResult = ({
   Map<String, MemoryBook> books,
   String setting,
   String opening,
+
   /// 用户在「常规」里点了删除世界。
   bool delete,
 });
@@ -123,13 +125,7 @@ class _EditDialog extends StatefulWidget {
 
 class _EditDialogState extends State<_EditDialog> {
   /// 五个标签：常规 / 世界观 / 角色 / 记忆 / 模型
-  static const List<String> _tabs = <String>[
-    '常规',
-    '世界观',
-    '角色',
-    '记忆',
-    '模型',
-  ];
+  static const List<String> _tabs = <String>['常规', '世界观', '角色', '记忆', '模型'];
 
   /// 角色身上只有这两步：他被谁感知、他由谁决定行动。
   static const List<StepKind> _charSteps = <StepKind>[
@@ -148,12 +144,15 @@ class _EditDialogState extends State<_EditDialog> {
       TextEditingController(text: c.persona),
   ];
   late Map<String, MemoryBook> _books = widget.books;
-  late final TextEditingController _name =
-      TextEditingController(text: widget.worldName);
-  late final TextEditingController _setting =
-      TextEditingController(text: widget.setting);
-  late final TextEditingController _opening =
-      TextEditingController(text: widget.opening);
+  late final TextEditingController _name = TextEditingController(
+    text: widget.worldName,
+  );
+  late final TextEditingController _setting = TextEditingController(
+    text: widget.setting,
+  );
+  late final TextEditingController _opening = TextEditingController(
+    text: widget.opening,
+  );
 
   @override
   void dispose() {
@@ -167,15 +166,15 @@ class _EditDialogState extends State<_EditDialog> {
   }
 
   void _save() => Navigator.of(context).pop((
-        name: _name.text.trim().isEmpty ? widget.worldName : _name.text.trim(),
-        characters: _chars,
-        charModels: _charModels,
-        plan: _plan,
-        books: _books,
-        setting: _setting.text,
-        opening: _opening.text,
-        delete: false,
-      ));
+    name: _name.text.trim().isEmpty ? widget.worldName : _name.text.trim(),
+    characters: _chars,
+    charModels: _charModels,
+    plan: _plan,
+    books: _books,
+    setting: _setting.text,
+    opening: _opening.text,
+    delete: false,
+  ));
 
   /// 删除世界。最后一个不给删——不然工作台就没有世界可看了。
   Future<void> _askDelete() async {
@@ -215,10 +214,7 @@ class _EditDialogState extends State<_EditDialog> {
               Row(
                 mainAxisAlignment: MainAxisAlignment.end,
                 children: <Widget>[
-                  JoButton(
-                    text: '取消',
-                    onTap: () => Navigator.of(c).pop(false),
-                  ),
+                  JoButton(text: '取消', onTap: () => Navigator.of(c).pop(false)),
                   const SizedBox(width: JoSpace.s2),
                   JoButton(
                     text: '删除',
@@ -272,11 +268,11 @@ class _EditDialogState extends State<_EditDialog> {
                 1 => _worldBook(p),
                 2 => _characters(p),
                 3 => MemoryPanel(
-                    books: _books,
-                    owners: widget.owners,
-                        onChanged: (Map<String, MemoryBook> next) =>
-                            setState(() => _books = next),
-                      ),
+                  books: _books,
+                  owners: widget.owners,
+                  onChanged: (Map<String, MemoryBook> next) =>
+                      setState(() => _books = next),
+                ),
                 _ => _models(p),
               },
             ),
@@ -317,10 +313,7 @@ class _EditDialogState extends State<_EditDialog> {
                   style: JoFonts.meta.copyWith(color: p.secondary),
                 ),
               ),
-              JoButton(
-                text: '×',
-                onTap: () => Navigator.of(context).pop(),
-              ),
+              JoButton(text: '×', onTap: () => Navigator.of(context).pop()),
             ],
           ),
           const SizedBox(height: JoSpace.s3),
@@ -384,16 +377,10 @@ class _EditDialogState extends State<_EditDialog> {
       padding: const EdgeInsets.all(JoSpace.s4),
       children: <Widget>[
         _label(p, '世界观设定'),
-        _Area(
-          controller: _setting,
-          hint: '时代、地点、规则、眼下的大事……',
-        ),
+        _Area(controller: _setting, hint: '时代、地点、规则、眼下的大事……'),
         const SizedBox(height: JoSpace.s5),
         _label(p, '开场'),
-        _Area(
-          controller: _opening,
-          hint: '故事开始时，玩家角色在哪里、看见什么……',
-        ),
+        _Area(controller: _opening, hint: '故事开始时，玩家角色在哪里、看见什么……'),
       ],
     );
   }
@@ -401,24 +388,21 @@ class _EditDialogState extends State<_EditDialog> {
   // ——— 角色 ———
 
   void _addChar() => setState(() {
-        _chars = <CharCard>[
-          ..._chars,
-          const CharCard(name: '', persona: ''),
-        ];
-        _personaC.add(TextEditingController());
-      });
+    _chars = <CharCard>[..._chars, const CharCard(name: '', persona: '')];
+    _personaC.add(TextEditingController());
+  });
 
   void _putChar(int i, CharCard c) => setState(() {
-        final List<CharCard> next = List<CharCard>.of(_chars);
-        next[i] = c;
-        _chars = next;
-      });
+    final List<CharCard> next = List<CharCard>.of(_chars);
+    next[i] = c;
+    _chars = next;
+  });
 
   void _removeChar(int i) => setState(() {
-        final List<CharCard> next = List<CharCard>.of(_chars)..removeAt(i);
-        _chars = next;
-        _personaC.removeAt(i).dispose();
-      });
+    final List<CharCard> next = List<CharCard>.of(_chars)..removeAt(i);
+    _chars = next;
+    _personaC.removeAt(i).dispose();
+  });
 
   /// 用模型读世界观、列出一批角色。
   ///
@@ -479,8 +463,10 @@ class _EditDialogState extends State<_EditDialog> {
           children: <Widget>[
             Text(
               '一共有 ${_chars.length} 名角色',
-              style: JoFonts.meta
-                  .copyWith(color: p.secondary, letterSpacing: 1.5),
+              style: JoFonts.meta.copyWith(
+                color: p.secondary,
+                letterSpacing: 1.5,
+              ),
             ),
             const Spacer(),
             JoButton(
@@ -719,12 +705,12 @@ class _EditDialogState extends State<_EditDialog> {
   }
 
   Widget _label(JoPalette p, String text) => Padding(
-        padding: const EdgeInsets.only(bottom: JoSpace.s2),
-        child: Text(
-          text,
-          style: JoFonts.meta.copyWith(color: p.secondary, letterSpacing: 1.5),
-        ),
-      );
+    padding: const EdgeInsets.only(bottom: JoSpace.s2),
+    child: Text(
+      text,
+      style: JoFonts.meta.copyWith(color: p.secondary, letterSpacing: 1.5),
+    ),
+  );
 }
 
 /// 多行输入（编辑弹窗里自己用的，跟创建向导那个同款）。

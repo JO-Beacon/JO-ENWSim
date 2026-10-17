@@ -206,7 +206,11 @@ class JoSegment<T> extends StatelessWidget {
             vertical: JoSpace.s1 + 2,
           ),
           decoration: BoxDecoration(
-            color: on ? p.surface : (hover ? p.surface.withValues(alpha: 0.6) : Colors.transparent),
+            color: on
+                ? p.surface
+                : (hover
+                      ? p.surface.withValues(alpha: 0.6)
+                      : Colors.transparent),
             border: JoShape.border(on || hover ? p.accent : p.border),
             borderRadius: JoShape.br,
           ),
@@ -239,7 +243,10 @@ class JoSection extends StatelessWidget {
           padding: const EdgeInsets.only(bottom: JoSpace.s2),
           child: Text(
             title,
-            style: JoFonts.meta.copyWith(color: p.secondary, letterSpacing: 1.2),
+            style: JoFonts.meta.copyWith(
+              color: p.secondary,
+              letterSpacing: 1.2,
+            ),
           ),
         ),
         Container(
@@ -251,8 +258,7 @@ class JoSection extends StatelessWidget {
           child: Column(
             children: <Widget>[
               for (int i = 0; i < children.length; i++) ...<Widget>[
-                if (i > 0)
-                  Divider(height: 1, thickness: 1, color: p.border),
+                if (i > 0) Divider(height: 1, thickness: 1, color: p.border),
                 children[i],
               ],
             ],
@@ -358,11 +364,7 @@ class JoPageHeader extends StatelessWidget {
 /// 不做「手打 Ctrl+E」这种反人类的事。
 /// Esc 取消本次捕获（不是记下 Esc）。
 class JoKeyField extends StatefulWidget {
-  const JoKeyField({
-    super.key,
-    required this.spec,
-    required this.onChanged,
-  });
+  const JoKeyField({super.key, required this.spec, required this.onChanged});
 
   /// 当前的键位写法，如 'Ctrl+E'。空 = 没设。
   final String spec;
@@ -445,9 +447,7 @@ class _JoKeyFieldState extends State<JoKeyField> {
             padding: const EdgeInsets.symmetric(horizontal: JoSpace.s3),
             decoration: BoxDecoration(
               color: p.surface,
-              border: Border.all(
-                color: _capturing ? p.accent : p.border,
-              ),
+              border: Border.all(color: _capturing ? p.accent : p.border),
             ),
             child: Text(
               _capturing
@@ -532,17 +532,105 @@ class _JoInputState extends State<JoInput> {
         border: JoShape.border(p.border),
         borderRadius: JoShape.br,
       ),
-      child: TextField(
+      child: JoTextField(
         controller: _c,
         onChanged: _onChanged,
         style: JoFonts.ui.copyWith(fontSize: size, color: p.text),
-        cursorColor: p.accent,
-        decoration: InputDecoration(
-          isDense: true,
-          border: InputBorder.none,
-          hintText: widget.hint,
-          hintStyle: JoFonts.ui.copyWith(fontSize: size, color: p.secondary),
-        ),
+        hint: widget.hint,
+        hintStyle: JoFonts.ui.copyWith(fontSize: size, color: p.secondary),
+      ),
+    );
+  }
+}
+
+/// 单行输入框：`EditableText` + 提示文字，**不挂 Material**。
+///
+/// 为什么不用自带那个 `TextField`：它要求外面有 `Material` 祖先。而这套界面
+/// 是自绘的、树里没有 `Material`，于是 debug 构建直接抛红屏（release 里那句
+/// 检查被编译掉，看着没事，但 ink / 焦点高亮 / 默认文字样式全取不到）。
+/// 所以输入框一律走这里，边框、底色、左右内边距由外面那个 Container 给。
+///
+/// 高度对齐原来的 `TextField(isDense: true, border: InputBorder.none)`：
+/// 它比纯文字高 8，所以这里上下各留 4。
+class JoTextField extends StatefulWidget {
+  const JoTextField({
+    super.key,
+    required this.controller,
+    required this.style,
+    this.hint,
+    this.hintStyle,
+    this.obscureText = false,
+    this.autofocus = false,
+    this.onChanged,
+    this.onSubmitted,
+    this.maxLines = 1,
+  });
+
+  final TextEditingController controller;
+  final TextStyle style;
+  final String? hint;
+  final TextStyle? hintStyle;
+  final bool obscureText;
+  final bool autofocus;
+  final ValueChanged<String>? onChanged;
+  final ValueChanged<String>? onSubmitted;
+
+  /// `null` = 不限行数（多行）。[obscureText] 为真时必须是 1。
+  final int? maxLines;
+
+  @override
+  State<JoTextField> createState() => _JoTextFieldState();
+}
+
+class _JoTextFieldState extends State<JoTextField> {
+  final FocusNode _focus = FocusNode();
+
+  @override
+  void dispose() {
+    _focus.dispose();
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final JoPalette p = JoTheme.of(context);
+    return Padding(
+      padding: const EdgeInsets.symmetric(vertical: 4),
+      child: ValueListenableBuilder<TextEditingValue>(
+        valueListenable: widget.controller,
+        builder: (BuildContext c, TextEditingValue v, Widget? _) {
+          return Stack(
+            alignment: AlignmentDirectional.centerStart,
+            children: <Widget>[
+              // 提示文字不能挡住点击，否则点上去插不进光标。
+              if (v.text.isEmpty && widget.hint != null)
+                IgnorePointer(
+                  child: Text(
+                    widget.hint!,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style:
+                        widget.hintStyle ??
+                        widget.style.copyWith(color: p.secondary),
+                  ),
+                ),
+              EditableText(
+                controller: widget.controller,
+                focusNode: _focus,
+                autofocus: widget.autofocus,
+                maxLines: widget.maxLines,
+                obscureText: widget.obscureText,
+                style: widget.style,
+                cursorColor: p.accent,
+                cursorWidth: 1.5,
+                backgroundCursorColor: p.border,
+                selectionColor: p.accent.withValues(alpha: 0.3),
+                onChanged: widget.onChanged,
+                onSubmitted: widget.onSubmitted,
+              ),
+            ],
+          );
+        },
       ),
     );
   }

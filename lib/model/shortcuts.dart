@@ -32,8 +32,8 @@ const List<JoKeyItem> kJoKeys = <JoKeyItem>[
 
 /// 默认键位。
 Map<String, String> joDefaultKeys() => <String, String>{
-      for (final JoKeyItem k in kJoKeys) k.id: k.fallback,
-    };
+  for (final JoKeyItem k in kJoKeys) k.id: k.fallback,
+};
 
 /// 把键位字符串解析成 Flutter 的快捷键。
 ///

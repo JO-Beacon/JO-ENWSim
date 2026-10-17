@@ -27,16 +27,19 @@ class ProviderApi {
       return const ProbeResult(ok: false, message: '这个服务商没有余额接口');
     }
     final String base = _accountBase(p);
-    final Uri? uri =
-        base.isEmpty ? null : Uri.tryParse('$base/user/balance');
+    final Uri? uri = base.isEmpty ? null : Uri.tryParse('$base/user/balance');
     if (uri == null) {
       return const ProbeResult(ok: false, message: '接口地址填得不对');
     }
     try {
-      final http.Response r =
-          await http.get(uri, headers: _headers(p)).timeout(_timeout);
+      final http.Response r = await http
+          .get(uri, headers: _headers(p))
+          .timeout(_timeout);
       if (r.statusCode < 200 || r.statusCode >= 300) {
-        return ProbeResult(ok: false, message: _httpMessage(r.statusCode, r.body));
+        return ProbeResult(
+          ok: false,
+          message: _httpMessage(r.statusCode, r.body),
+        );
       }
       return ProbeResult(ok: true, message: _parseBalance(r.body));
     } catch (e) {
@@ -47,10 +50,7 @@ class ProviderApi {
   /// 拉模型列表。成功 = 连上了。
   static Future<ProbeResult> fetchModels(Provider p) async {
     if (p.protocol.listPath == null) {
-      return ProbeResult(
-        ok: false,
-        message: '${p.protocol.label}这个协议没有模型列表接口',
-      );
+      return ProbeResult(ok: false, message: '${p.protocol.label}这个协议没有模型列表接口');
     }
     final Uri? uri = _modelsUri(p);
     if (uri == null) {
@@ -63,16 +63,16 @@ class ProviderApi {
       if (r.statusCode < 200 || r.statusCode >= 300) {
         return ProbeResult(
           ok: false,
-          message: _httpMessage(r.statusCode, r.body,
-              deepSeek: p.protocol.isDeepSeek),
+          message: _httpMessage(
+            r.statusCode,
+            r.body,
+            deepSeek: p.protocol.isDeepSeek,
+          ),
         );
       }
       final List<String> ids = _parseIds(p.protocol, r.body);
       if (ids.isEmpty) {
-        return ProbeResult(
-          ok: false,
-          message: '连上了，但没解析出模型：${_short(r.body)}',
-        );
+        return ProbeResult(ok: false, message: '连上了，但没解析出模型：${_short(r.body)}');
       }
       return ProbeResult(
         ok: true,
@@ -132,10 +132,14 @@ class ProviderApi {
     if (proto.wire == Wire.google) {
       final Object? list = j['models'];
       if (list is! List) return const <String>[];
-      return list.whereType<Map>().map((Map<dynamic, dynamic> m) {
-        final String s = '${m['name'] ?? ''}';
-        return s.startsWith('models/') ? s.substring(7) : s;
-      }).where((String s) => s.isNotEmpty).toList();
+      return list
+          .whereType<Map>()
+          .map((Map<dynamic, dynamic> m) {
+            final String s = '${m['name'] ?? ''}';
+            return s.startsWith('models/') ? s.substring(7) : s;
+          })
+          .where((String s) => s.isNotEmpty)
+          .toList();
     }
     final Object? list = j['data'];
     if (list is! List) return const <String>[];
@@ -167,7 +171,8 @@ class ProviderApi {
   /// **按厂商分**：402“余额不足”是 DeepSeek 的说法，OpenAI 那边没这一条
   /// （它是 403）；所以别拿一份表套所有厂商。
   static String _httpMessage(int code, String body, {bool deepSeek = false}) {
-    final String hint = <int, String>{
+    final String hint =
+        <int, String>{
           400: '请求格式不对',
           401: 'API Key 不对',
           403: '没有权限',

@@ -147,10 +147,10 @@ class JoSettings {
 
   /// 叙事正文样式（正文块 / 焦点栏用）。
   TextStyle bodyStyle(Color color) => JoFonts.body.copyWith(
-        fontFamily: bodyFamily,
-        fontSize: bodySize,
-        color: color,
-      );
+    fontFamily: bodyFamily,
+    fontSize: bodySize,
+    color: color,
+  );
 
   JoSettings copyWith({
     bool? isDark,
@@ -190,7 +190,8 @@ class JoTheme extends InheritedWidget {
 
   static JoPalette of(BuildContext context) => _scope(context).palette;
 
-  static JoSettings settingsOf(BuildContext context) => _scope(context).settings;
+  static JoSettings settingsOf(BuildContext context) =>
+      _scope(context).settings;
 
   @override
   bool updateShouldNotify(JoTheme oldWidget) =>

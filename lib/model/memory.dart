@@ -21,9 +21,9 @@ enum MemorySource {
   final String label;
 
   static MemorySource byName(String s) => MemorySource.values.firstWhere(
-        (MemorySource v) => v.name == s,
-        orElse: () => MemorySource.manual,
-      );
+    (MemorySource v) => v.name == s,
+    orElse: () => MemorySource.manual,
+  );
 }
 
 /// 一条记忆。
@@ -58,24 +58,23 @@ class MemoryEntry {
     String? kind,
     MemorySource? source,
     DateTime? updatedAt,
-  }) =>
-      MemoryEntry(
-        id: id,
-        content: content ?? this.content,
-        kind: kind ?? this.kind,
-        source: source ?? this.source,
-        createdAt: createdAt,
-        updatedAt: updatedAt ?? this.updatedAt,
-      );
+  }) => MemoryEntry(
+    id: id,
+    content: content ?? this.content,
+    kind: kind ?? this.kind,
+    source: source ?? this.source,
+    createdAt: createdAt,
+    updatedAt: updatedAt ?? this.updatedAt,
+  );
 
   Map<String, Object?> toJson() => <String, Object?>{
-        'id': id,
-        'content': content,
-        'kind': kind,
-        'source': source.name,
-        'createdAt': createdAt.toIso8601String(),
-        'updatedAt': updatedAt.toIso8601String(),
-      };
+    'id': id,
+    'content': content,
+    'kind': kind,
+    'source': source.name,
+    'createdAt': createdAt.toIso8601String(),
+    'updatedAt': updatedAt.toIso8601String(),
+  };
 
   static MemoryEntry fromJson(Map<String, Object?> j) {
     final DateTime now = DateTime.now();
@@ -108,9 +107,9 @@ class MemoryBook {
       MemoryBook(ownerId: ownerId, entries: entries ?? this.entries);
 
   Map<String, Object?> toJson() => <String, Object?>{
-        'ownerId': ownerId,
-        'entries': entries.map((MemoryEntry e) => e.toJson()).toList(),
-      };
+    'ownerId': ownerId,
+    'entries': entries.map((MemoryEntry e) => e.toJson()).toList(),
+  };
 
   static MemoryBook fromJson(Map<String, Object?> j) {
     final List<dynamic> raw =
@@ -119,8 +118,10 @@ class MemoryBook {
       ownerId: '${j['ownerId'] ?? ''}',
       entries: raw
           .whereType<Map<String, dynamic>>()
-          .map((Map<String, dynamic> m) =>
-              MemoryEntry.fromJson(m.cast<String, Object?>()))
+          .map(
+            (Map<String, dynamic> m) =>
+                MemoryEntry.fromJson(m.cast<String, Object?>()),
+          )
           .toList(),
     );
   }

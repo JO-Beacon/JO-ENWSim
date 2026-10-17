@@ -57,34 +57,33 @@ class CharChoices {
     String? effortLevel,
     String? effortBudget,
     bool? jsonOutput,
-  }) =>
-      CharChoices(
-        temperature: temperature ?? this.temperature,
-        topP: topP ?? this.topP,
-        maxOutput: maxOutput ?? this.maxOutput,
-        stream: stream ?? this.stream,
-        effortLevel: effortLevel ?? this.effortLevel,
-        effortBudget: effortBudget ?? this.effortBudget,
-        jsonOutput: jsonOutput ?? this.jsonOutput,
-      );
+  }) => CharChoices(
+    temperature: temperature ?? this.temperature,
+    topP: topP ?? this.topP,
+    maxOutput: maxOutput ?? this.maxOutput,
+    stream: stream ?? this.stream,
+    effortLevel: effortLevel ?? this.effortLevel,
+    effortBudget: effortBudget ?? this.effortBudget,
+    jsonOutput: jsonOutput ?? this.jsonOutput,
+  );
 
   Map<String, Object?> toJson() => <String, Object?>{
-        'temperature': temperature,
-        'topP': topP,
-        'maxOutput': maxOutput,
-        'stream': stream,
-        'effortLevel': effortLevel,
-        'effortBudget': effortBudget,
-        'jsonOutput': jsonOutput,
-      };
+    'temperature': temperature,
+    'topP': topP,
+    'maxOutput': maxOutput,
+    'stream': stream,
+    'effortLevel': effortLevel,
+    'effortBudget': effortBudget,
+    'jsonOutput': jsonOutput,
+  };
 
   static CharChoices fromJson(Map<String, Object?> j) => CharChoices(
-        temperature: '${j['temperature'] ?? ''}',
-        topP: '${j['topP'] ?? ''}',
-        maxOutput: '${j['maxOutput'] ?? ''}',
-        stream: j['stream'] == true,
-        effortLevel: '${j['effortLevel'] ?? ''}',
-        effortBudget: '${j['effortBudget'] ?? ''}',
-        jsonOutput: j['jsonOutput'] == true,
-      );
+    temperature: '${j['temperature'] ?? ''}',
+    topP: '${j['topP'] ?? ''}',
+    maxOutput: '${j['maxOutput'] ?? ''}',
+    stream: j['stream'] == true,
+    effortLevel: '${j['effortLevel'] ?? ''}',
+    effortBudget: '${j['effortBudget'] ?? ''}',
+    jsonOutput: j['jsonOutput'] == true,
+  );
 }

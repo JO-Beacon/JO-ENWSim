@@ -32,8 +32,7 @@ class _LicensesPageState extends State<LicensesPage> {
   Future<void> _load() async {
     final Map<String, String> out = <String, String>{};
     await for (final LicenseEntry e in LicenseRegistry.licenses) {
-      final String name =
-          e.packages.isEmpty ? '(未署名)' : e.packages.first;
+      final String name = e.packages.isEmpty ? '(未署名)' : e.packages.first;
       final String text = e.paragraphs
           .map((LicenseParagraph p) => p.text)
           .join('\n\n')
@@ -98,34 +97,36 @@ class _LicensesPageState extends State<LicensesPage> {
                       onTap: () => _showText(e.key, e.value),
                       builder: (BuildContext c, bool hover, bool down) =>
                           Container(
-                        padding: const EdgeInsets.symmetric(
-                          vertical: JoSpace.s3,
-                          horizontal: JoSpace.s2,
-                        ),
-                        decoration: BoxDecoration(
-                          color: hover
-                              ? p.surface
-                              : p.bg.withValues(alpha: 0),
-                          border: Border(
-                            bottom: BorderSide(color: p.border),
-                          ),
-                        ),
-                        child: Row(
-                          children: <Widget>[
-                            Expanded(
-                              child: Text(
-                                e.key,
-                                style: JoFonts.ui
-                                    .copyWith(fontSize: 13, color: p.text),
+                            padding: const EdgeInsets.symmetric(
+                              vertical: JoSpace.s3,
+                              horizontal: JoSpace.s2,
+                            ),
+                            decoration: BoxDecoration(
+                              color: hover
+                                  ? p.surface
+                                  : p.bg.withValues(alpha: 0),
+                              border: Border(
+                                bottom: BorderSide(color: p.border),
                               ),
                             ),
-                            Text(
-                              '看正文 →',
-                              style: JoFonts.meta.copyWith(color: p.accent),
+                            child: Row(
+                              children: <Widget>[
+                                Expanded(
+                                  child: Text(
+                                    e.key,
+                                    style: JoFonts.ui.copyWith(
+                                      fontSize: 13,
+                                      color: p.text,
+                                    ),
+                                  ),
+                                ),
+                                Text(
+                                  '看正文 →',
+                                  style: JoFonts.meta.copyWith(color: p.accent),
+                                ),
+                              ],
                             ),
-                          ],
-                        ),
-                      ),
+                          ),
                     ),
                 ],
               ),
@@ -155,8 +156,10 @@ class _LicensesPageState extends State<LicensesPage> {
                       Expanded(
                         child: Text(
                           name,
-                          style:
-                              JoFonts.ui.copyWith(fontSize: 14, color: p.text),
+                          style: JoFonts.ui.copyWith(
+                            fontSize: 14,
+                            color: p.text,
+                          ),
                         ),
                       ),
                       JoButton(

@@ -96,10 +96,7 @@ class _AddProviderDialog extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          JoButton(
-            text: '×',
-            onTap: () => Navigator.of(context).pop(),
-          ),
+          JoButton(text: '×', onTap: () => Navigator.of(context).pop()),
         ],
       ),
     );
@@ -161,9 +158,9 @@ class _AddProviderDialog extends StatelessWidget {
   }
 
   Widget _section(JoPalette p, String text) => Padding(
-        padding: const EdgeInsets.fromLTRB(0, 0, 0, JoSpace.s2),
-        child: Text(text, style: JoFonts.meta.copyWith(color: p.secondary)),
-      );
+    padding: const EdgeInsets.fromLTRB(0, 0, 0, JoSpace.s2),
+    child: Text(text, style: JoFonts.meta.copyWith(color: p.secondary)),
+  );
 
   Widget _card(
     BuildContext context,

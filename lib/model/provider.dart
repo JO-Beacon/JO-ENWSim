@@ -8,30 +8,59 @@ enum Wire { openai, anthropic, google }
 
 /// 接口协议。
 enum Protocol {
-  openai('OpenAI', 'https://api.openai.com/v1', '/chat/completions',
-      Wire.openai, '/models'),
+  openai(
+    'OpenAI',
+    'https://api.openai.com/v1',
+    '/chat/completions',
+    Wire.openai,
+    '/models',
+  ),
   // Google 的列表端点形状不一样（带 ?key=），但路径仍是 /models。
-  google('Google', 'https://generativelanguage.googleapis.com/v1beta',
-      '/models/{model}:generateContent', Wire.google, '/models'),
+  google(
+    'Google',
+    'https://generativelanguage.googleapis.com/v1beta',
+    '/models/{model}:generateContent',
+    Wire.google,
+    '/models',
+  ),
   // Anthropic **没有公开的模型列表端点**，所以这里是 null。
-  claude('Claude', 'https://api.anthropic.com/v1', '/messages', Wire.anthropic,
-      null),
-  deepseek('DeepSeek', 'https://api.deepseek.com', '/chat/completions',
-      Wire.openai, '/models'),
+  claude(
+    'Claude',
+    'https://api.anthropic.com/v1',
+    '/messages',
+    Wire.anthropic,
+    null,
+  ),
+  deepseek(
+    'DeepSeek',
+    'https://api.deepseek.com',
+    '/chat/completions',
+    Wire.openai,
+    '/models',
+  ),
   // DeepSeek 的 Anthropic 格式**不能直接把 /models 接在 /anthropic 后面**；
   // 正确做法是**剥掉 /anthropic、去主域名**拼 /models —— 也就是 provider_api
   // 里的 _accountBase 干的事。端点还是主域名那个列表接口。
-  deepseekAnthropic('DeepSeek · Anthropic 格式',
-      'https://api.deepseek.com/anthropic', '/messages', Wire.anthropic,
-      '/models'),
+  deepseekAnthropic(
+    'DeepSeek · Anthropic 格式',
+    'https://api.deepseek.com/anthropic',
+    '/messages',
+    Wire.anthropic,
+    '/models',
+  ),
   // 三种“兼容”只保证形状像。列模型这条按 OpenAI 的**约定**试一下是可以的，
   // 但那是约定、不是承诺——拉不到的时候要说清是“不确知”，别说人家坏了。
   openaiCompatible('OpenAI 兼容', '', '', Wire.openai, '/models'),
   anthropicCompatible('Anthropic 兼容', '', '', Wire.anthropic, null),
   googleCompatible('Google 兼容', '', '', Wire.google, null);
 
-  const Protocol(this.label, this.baseUrl, this.apiPath, this.wire,
-      this.listPath);
+  const Protocol(
+    this.label,
+    this.baseUrl,
+    this.apiPath,
+    this.wire,
+    this.listPath,
+  );
 
   final String label;
 
@@ -60,9 +89,9 @@ enum Protocol {
       this != googleCompatible;
 
   static Protocol byName(String s) => Protocol.values.firstWhere(
-        (Protocol p) => p.name == s,
-        orElse: () => Protocol.openai,
-      );
+    (Protocol p) => p.name == s,
+    orElse: () => Protocol.openai,
+  );
 }
 
 /// 思考模式。
@@ -78,9 +107,9 @@ enum ThinkingMode {
   final String label;
 
   static ThinkingMode byName(String s) => ThinkingMode.values.firstWhere(
-        (ThinkingMode m) => m.name == s,
-        orElse: () => ThinkingMode.auto,
-      );
+    (ThinkingMode m) => m.name == s,
+    orElse: () => ThinkingMode.auto,
+  );
 }
 
 /// 一个协议下“思考”长什么样、有哪些可选值。
@@ -177,6 +206,7 @@ const List<ModelRef> kDeepSeekModels = <ModelRef>[
       tools: true,
       reasoning: true,
       vision: true,
+      stream: true,
     ),
   ),
   ModelRef(
@@ -190,6 +220,7 @@ const List<ModelRef> kDeepSeekModels = <ModelRef>[
       tools: true,
       reasoning: true,
       vision: false,
+      stream: true,
     ),
   ),
 ];
@@ -207,6 +238,7 @@ class ModelCaps {
     this.tools = false,
     this.reasoning = false,
     this.vision = false,
+    this.stream,
   });
 
   /// 上下文窗口
@@ -225,29 +257,39 @@ class ModelCaps {
   final bool reasoning;
   final bool vision;
 
+  /// 支不支持流式。
+  ///
+  /// **三态，不是 bool**：true 支持 / false 不支持 / **null 不知道**。
+  /// 用户自加的模型没声明能力 —— 那是“不知道”，不是“不支持”。
+  /// （tools / reasoning / vision 现在还是 bool，有同样的毛病，以后一起改。）
+  final bool? stream;
+
   Map<String, Object?> toJson() => <String, Object?>{
-        'contextWindow': contextWindow,
-        'maxOutput': maxOutput,
-        'inputModalities': inputModalities,
-        'outputModalities': outputModalities,
-        'tools': tools,
-        'reasoning': reasoning,
-        'vision': vision,
-      };
+    'contextWindow': contextWindow,
+    'maxOutput': maxOutput,
+    'inputModalities': inputModalities,
+    'outputModalities': outputModalities,
+    'tools': tools,
+    'reasoning': reasoning,
+    'vision': vision,
+    'stream': stream,
+  };
 
   static ModelCaps fromJson(Map<String, Object?> j) => ModelCaps(
-        contextWindow: '${j['contextWindow'] ?? ''}',
-        maxOutput: '${j['maxOutput'] ?? ''}',
-        inputModalities: _strList(j['inputModalities']),
-        outputModalities: _strList(j['outputModalities']),
-        tools: j['tools'] == true,
-        reasoning: j['reasoning'] == true,
-        vision: j['vision'] == true,
-      );
+    contextWindow: '${j['contextWindow'] ?? ''}',
+    maxOutput: '${j['maxOutput'] ?? ''}',
+    inputModalities: _strList(j['inputModalities']),
+    outputModalities: _strList(j['outputModalities']),
+    tools: j['tools'] == true,
+    reasoning: j['reasoning'] == true,
+    vision: j['vision'] == true,
+    // 缺就是 null（不知道）；写了但不是布尔也当不知道，
+    // 因为这里存的是“能不能”，没有可信的默认。
+    stream: j['stream'] is bool ? j['stream'] as bool : null,
+  );
 
-  static List<String> _strList(Object? v) => v is List
-      ? v.whereType<String>().toList()
-      : const <String>[];
+  static List<String> _strList(Object? v) =>
+      v is List ? v.whereType<String>().toList() : const <String>[];
 }
 
 /// 一个模型条目。
@@ -286,32 +328,31 @@ class ModelRef {
     String? group,
     bool? enabled,
     ModelCaps? caps,
-  }) =>
-      ModelRef(
-        id: id ?? this.id,
-        name: name ?? this.name,
-        group: group ?? this.group,
-        enabled: enabled ?? this.enabled,
-        caps: caps ?? this.caps,
-      );
+  }) => ModelRef(
+    id: id ?? this.id,
+    name: name ?? this.name,
+    group: group ?? this.group,
+    enabled: enabled ?? this.enabled,
+    caps: caps ?? this.caps,
+  );
 
   Map<String, Object?> toJson() => <String, Object?>{
-        'id': id,
-        'name': name,
-        'group': group,
-        'enabled': enabled,
-        'caps': caps?.toJson(),
-      };
+    'id': id,
+    'name': name,
+    'group': group,
+    'enabled': enabled,
+    'caps': caps?.toJson(),
+  };
 
   static ModelRef fromJson(Map<String, Object?> j) => ModelRef(
-        id: '${j['id'] ?? ''}',
-        name: '${j['name'] ?? ''}',
-        group: '${j['group'] ?? ''}',
-        enabled: j['enabled'] != false,
-        caps: j['caps'] is Map
-            ? ModelCaps.fromJson((j['caps'] as Map).cast<String, Object?>())
-            : null,
-      );
+    id: '${j['id'] ?? ''}',
+    name: '${j['name'] ?? ''}',
+    group: '${j['group'] ?? ''}',
+    enabled: j['enabled'] != false,
+    caps: j['caps'] is Map
+        ? ModelCaps.fromJson((j['caps'] as Map).cast<String, Object?>())
+        : null,
+  );
 }
 
 /// 自定义服务商的四种起手形状。
@@ -319,8 +360,7 @@ class ModelRef {
 /// 预设来的服务商**没有**这个标记：端点对它们是死的事实，不用用户填。
 enum CustomShape {
   openaiChat('OpenAI 兼容 · chat/completions', Protocol.openaiCompatible, false),
-  openaiResponses('OpenAI 兼容 · Responses API', Protocol.openaiCompatible,
-      true),
+  openaiResponses('OpenAI 兼容 · Responses API', Protocol.openaiCompatible, true),
   google('Google 兼容', Protocol.googleCompatible, false),
   anthropic('Anthropic 兼容', Protocol.anthropicCompatible, false);
 
@@ -344,9 +384,9 @@ enum ServiceKind {
   final String label;
 
   static ServiceKind byName(String s) => ServiceKind.values.firstWhere(
-        (ServiceKind k) => k.name == s,
-        orElse: () => ServiceKind.model,
-      );
+    (ServiceKind k) => k.name == s,
+    orElse: () => ServiceKind.model,
+  );
 }
 
 /// 一个服务。
@@ -399,10 +439,13 @@ class Provider {
   /// 完整接口地址（展示用）。
   String get endpoint {
     final String base =
-        (baseUrl.trim().isEmpty ? protocol.baseUrl : baseUrl.trim())
-            .replaceAll(RegExp(r'/+$'), '');
-    final String path =
-        apiPath.trim().isEmpty ? protocol.apiPath : apiPath.trim();
+        (baseUrl.trim().isEmpty ? protocol.baseUrl : baseUrl.trim()).replaceAll(
+          RegExp(r'/+$'),
+          '',
+        );
+    final String path = apiPath.trim().isEmpty
+        ? protocol.apiPath
+        : apiPath.trim();
     return '$base$path';
   }
 
@@ -420,36 +463,35 @@ class Provider {
     List<ModelRef>? models,
     CustomShape? custom,
     ServiceKind? kind,
-  }) =>
-      Provider(
-        id: id,
-        protocol: protocol ?? this.protocol,
-        name: name ?? this.name,
-        group: group ?? this.group,
-        enabled: enabled ?? this.enabled,
-        apiKey: apiKey ?? this.apiKey,
-        baseUrl: baseUrl ?? this.baseUrl,
-        apiPath: apiPath ?? this.apiPath,
-        useResponsesApi: useResponsesApi ?? this.useResponsesApi,
-        models: models ?? this.models,
-        custom: custom ?? this.custom,
-        kind: kind ?? this.kind,
-      );
+  }) => Provider(
+    id: id,
+    protocol: protocol ?? this.protocol,
+    name: name ?? this.name,
+    group: group ?? this.group,
+    enabled: enabled ?? this.enabled,
+    apiKey: apiKey ?? this.apiKey,
+    baseUrl: baseUrl ?? this.baseUrl,
+    apiPath: apiPath ?? this.apiPath,
+    useResponsesApi: useResponsesApi ?? this.useResponsesApi,
+    models: models ?? this.models,
+    custom: custom ?? this.custom,
+    kind: kind ?? this.kind,
+  );
 
   Map<String, Object?> toJson() => <String, Object?>{
-        'id': id,
-        'protocol': protocol.name,
-        'name': name,
-        'group': group,
-        'enabled': enabled,
-        'apiKey': apiKey,
-        'baseUrl': baseUrl,
-        'apiPath': apiPath,
-        'useResponsesApi': useResponsesApi,
-        'models': models.map((ModelRef m) => m.toJson()).toList(),
-        'custom': custom?.name,
-        'kind': kind.name,
-      };
+    'id': id,
+    'protocol': protocol.name,
+    'name': name,
+    'group': group,
+    'enabled': enabled,
+    'apiKey': apiKey,
+    'baseUrl': baseUrl,
+    'apiPath': apiPath,
+    'useResponsesApi': useResponsesApi,
+    'models': models.map((ModelRef m) => m.toJson()).toList(),
+    'custom': custom?.name,
+    'kind': kind.name,
+  };
 
   static Provider fromJson(Map<String, Object?> j) {
     final Protocol protocol = Provider._protocolOf(j['protocol']);
@@ -592,7 +634,6 @@ const List<ProviderPreset> kProviderPresets = <ProviderPreset>[
     baseUrl: 'https://ai-gateway.vercel.sh/v1',
   ),
 ];
-
 
 /// 搜索服务的预设。
 ///

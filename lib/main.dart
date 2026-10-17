@@ -4,6 +4,8 @@ import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show MethodChannel, rootBundle;
 
+import 'data/world_store.dart';
+import 'model/demo.dart';
 import 'model/model_plan.dart';
 import 'model/provider.dart';
 import 'theme/settings_store.dart';
@@ -26,18 +28,21 @@ void _registerOwnLicense() {
 /// 让人不用去翻安装目录。
 void _registerBundledLicenses() {
   LicenseRegistry.addLicense(() async* {
-    final String text = await rootBundle
-        .loadString('assets/licenses/RemixIcon-License-1.0.txt');
+    final String text = await rootBundle.loadString(
+      'assets/licenses/RemixIcon-License-1.0.txt',
+    );
     yield LicenseEntryWithLineBreaks(<String>['Remix Icon'], text);
   });
   LicenseRegistry.addLicense(() async* {
-    final String text =
-        await rootBundle.loadString('assets/licenses/SourceHanSans-OFL-1.1.txt');
+    final String text = await rootBundle.loadString(
+      'assets/licenses/SourceHanSans-OFL-1.1.txt',
+    );
     yield LicenseEntryWithLineBreaks(<String>['Noto Sans SC'], text);
   });
   LicenseRegistry.addLicense(() async* {
-    final String text =
-        await rootBundle.loadString('assets/licenses/SourceHanSans-OFL-1.1.txt');
+    final String text = await rootBundle.loadString(
+      'assets/licenses/SourceHanSans-OFL-1.1.txt',
+    );
     yield LicenseEntryWithLineBreaks(<String>['Noto Serif SC'], text);
   });
 }
@@ -49,13 +54,20 @@ Future<void> main() async {
   final SettingsStore store = await SettingsStore.open();
   final LoadResult<List<Provider>> providers = store.loadProviders();
   final LoadResult<ModelPlan> plan = store.loadGlobalPlan();
+  // 世界和回合在 SQLite 里。第一次建库时自带了几个世界。
+  final WorldStore worldStore = await WorldStore.open();
+  final WorldsLoad worlds = worldStore.loadWorlds();
   runApp(
     JoEnwsApp(
       store: store,
+      worldStore: worldStore,
+      initialWorlds: worlds.worlds,
+      worldsNote: worlds.note,
       initial: store.load(),
       providers: providers.value,
       servicesNote: loadNoteOf(providers, '服务商'),
       initialGlobalPlan: plan.value,
+      initialPrompts: store.loadPrompts(),
       globalPlanNote: loadNoteOf(plan, '模型默认'),
     ),
   );
@@ -67,6 +79,10 @@ class JoEnwsApp extends StatefulWidget {
     required this.store,
     required this.initial,
     this.providers = const <Provider>[],
+    this.initialPrompts = const <String, String>{},
+    required this.worldStore,
+    this.initialWorlds = const <World>[],
+    this.worldsNote,
     this.servicesNote,
     this.initialGlobalPlan = const ModelPlan(),
     this.globalPlanNote,
@@ -81,8 +97,20 @@ class JoEnwsApp extends StatefulWidget {
 
   final ModelPlan initialGlobalPlan;
 
+  /// 设置 → 引擎 里那几步的提示词（缺的已用默认补上）。
+  final Map<String, String> initialPrompts;
+
   /// 全局模型默认读不出来时的一句话。
   final String? globalPlanNote;
+
+  /// 世界和回合的库。
+  final WorldStore worldStore;
+
+  /// 打开时读出来的世界。
+  final List<World> initialWorlds;
+
+  /// 世界存档读不出来时的一句话（如实说，不藏）。
+  final String? worldsNote;
 
   @override
   State<JoEnwsApp> createState() => _JoEnwsAppState();
@@ -98,6 +126,11 @@ class _JoEnwsAppState extends State<JoEnwsApp>
 
   /// 快捷键：动作 id → 键位字符串。
   late Map<String, String> _keys = widget.store.loadKeys();
+
+  /// 引擎提示词。存盘。
+  late Map<String, String> _prompts = <String, String>{
+    ...widget.initialPrompts,
+  };
 
   /// 明暗过渡：0 = 明（纸），1 = 暗（机器）。
   /// 直接在根上插色调色板，所有读 JoTheme.of 的组件就都跟着补间了。
@@ -146,8 +179,8 @@ class _JoEnwsAppState extends State<JoEnwsApp>
     // 系统主题变了就自己跟上——不然得重启才跟。
     WidgetsBinding.instance.platformDispatcher.onPlatformBrightnessChanged =
         () {
-      if (_settings.followSystem) _syncTheme();
-    };
+          if (_settings.followSystem) _syncTheme();
+        };
   }
 
   @override
@@ -196,8 +229,11 @@ class _JoEnwsAppState extends State<JoEnwsApp>
   @override
   Widget build(BuildContext context) {
     // 给界面的那套，直接用动画当前的位置算——过渡期间也是平滑的。
-    final JoPalette palette =
-        JoPalette.lerp(JoPalette.light, JoPalette.dark, _themeAnim.value);
+    final JoPalette palette = JoPalette.lerp(
+      JoPalette.light,
+      JoPalette.dark,
+      _themeAnim.value,
+    );
     return MaterialApp(
       title: 'JO-ENWSim',
       debugShowCheckedModeBanner: false,
@@ -207,8 +243,7 @@ class _JoEnwsAppState extends State<JoEnwsApp>
         scaffoldBackgroundColor: palette.bg,
         colorScheme: ColorScheme.fromSeed(
           seedColor: palette.accent,
-          brightness:
-              _effectiveDark ? Brightness.dark : Brightness.light,
+          brightness: _effectiveDark ? Brightness.dark : Brightness.light,
         ),
       ),
       builder: (BuildContext context, Widget? child) {
@@ -237,6 +272,14 @@ class _JoEnwsAppState extends State<JoEnwsApp>
         providers: _providers,
         onProvidersChanged: _updateProviders,
         globalPlan: _globalPlan,
+        prompts: _prompts,
+        onPromptsChanged: (Map<String, String> next) {
+          setState(() => _prompts = next);
+          widget.store.savePrompts(next);
+        },
+        store: widget.worldStore,
+        worlds: widget.initialWorlds,
+        worldsNote: widget.worldsNote,
         keys: _keys,
         onKeysChanged: (Map<String, String> next) {
           setState(() => _keys = next);

@@ -29,8 +29,8 @@ class _WorldDialog extends StatefulWidget {
 
 class _Draft {
   _Draft({String name = '', String persona = ''})
-      : nameC = TextEditingController(text: name),
-        personaC = TextEditingController(text: persona);
+    : nameC = TextEditingController(text: name),
+      personaC = TextEditingController(text: persona);
 
   final TextEditingController nameC;
   final TextEditingController personaC;
@@ -90,11 +90,10 @@ class _WorldDialogState extends State<_WorldDialog> {
 
   /// 走到第三步时能选的名字：跟 _finish 的过滤规则一致。
   List<String> get _playerNames => <String>[
-        for (final _Draft d in _chars)
-          if (d.nameC.text.trim().isNotEmpty ||
-              d.personaC.text.trim().isNotEmpty)
-            (d.nameC.text.trim().isEmpty ? '（未命名）' : d.nameC.text.trim()),
-      ];
+    for (final _Draft d in _chars)
+      if (d.nameC.text.trim().isNotEmpty || d.personaC.text.trim().isNotEmpty)
+        (d.nameC.text.trim().isEmpty ? '（未命名）' : d.nameC.text.trim()),
+  ];
 
   bool get _canNext =>
       _settingC.text.trim().isNotEmpty && _openingC.text.trim().isNotEmpty;
@@ -209,7 +208,10 @@ class _WorldDialogState extends State<_WorldDialog> {
             onTap: () => Navigator.of(context).pop(),
             child: MouseRegion(
               cursor: SystemMouseCursors.click,
-              child: Text('×', style: JoFonts.meta.copyWith(color: p.secondary)),
+              child: Text(
+                '×',
+                style: JoFonts.meta.copyWith(color: p.secondary),
+              ),
             ),
           ),
         ],
@@ -246,15 +248,9 @@ class _WorldDialogState extends State<_WorldDialog> {
       child: Row(
         children: <Widget>[
           if (_step == 1)
-            JoButton(
-              text: '取消',
-              onTap: () => Navigator.of(context).pop(),
-            )
+            JoButton(text: '取消', onTap: () => Navigator.of(context).pop())
           else
-            JoButton(
-              text: '← 上一步',
-              onTap: () => _goStep(_step - 1),
-            ),
+            JoButton(text: '← 上一步', onTap: () => _goStep(_step - 1)),
           const Spacer(),
           if (_step == 1)
             JoButton(
@@ -352,18 +348,10 @@ class _WorldDialogState extends State<_WorldDialog> {
         _Input(controller: _nameC, hint: '比如：旧宅 · 雨夜'),
         const SizedBox(height: JoSpace.s5),
         _label(p, '世界观设定'),
-        _Input(
-          controller: _settingC,
-          hint: '时代、地点、规则、眼下的大事……',
-          lines: 5,
-        ),
+        _Input(controller: _settingC, hint: '时代、地点、规则、眼下的大事……', lines: 5),
         const SizedBox(height: JoSpace.s5),
         _label(p, '开场'),
-        _Input(
-          controller: _openingC,
-          hint: '故事开始时，玩家角色在哪里、看见什么……',
-          lines: 6,
-        ),
+        _Input(controller: _openingC, hint: '故事开始时，玩家角色在哪里、看见什么……', lines: 6),
         const SizedBox(height: JoSpace.s5),
         Row(
           children: <Widget>[

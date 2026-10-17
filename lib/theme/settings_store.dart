@@ -48,6 +48,7 @@ class SettingsStore {
   static const String _kProviders = 'provider.list';
   static const String _kGlobalPlan = 'model.global';
   static const String _kKeys = 'input.keys';
+  static const String _kPrompts = 'engine.prompts';
   static const String _kFollow = 'ui.followSystem';
 
   static Future<SettingsStore> open() async =>
@@ -154,6 +155,38 @@ class SettingsStore {
   Future<void> saveKeys(Map<String, String> keys) async {
     await _prefs.setString(_kKeys, jsonEncode(keys));
   }
+
+  /// 引擎的提示词（每一步一份）。
+  ///
+  /// **缺的用默认值补上** —— 设成空串不算“没设”：空串是用户主动清空的，
+  /// 那意味着他不想给这一步任何额外说明。只有**没这个键**才回默认。
+  Map<String, String> loadPrompts() {
+    final Map<String, String> out = <String, String>{
+      for (final String id in _promptIds) id: kDefaultPromptOf(id),
+    };
+    final String? raw = _prefs.getString(_kPrompts);
+    if (raw == null || raw.isEmpty) return out;
+    try {
+      final Object? j = jsonDecode(raw);
+      if (j is Map) {
+        j.forEach((Object? k, Object? v) {
+          final String key = '$k';
+          if (out.containsKey(key) && v is String) out[key] = v;
+        });
+      }
+    } catch (_) {
+      // 读不出来就用默认，界面那边会照实说。
+    }
+    return out;
+  }
+
+  Future<void> savePrompts(Map<String, String> prompts) async {
+    await _prefs.setString(_kPrompts, jsonEncode(prompts));
+  }
+
+  static final List<String> _promptIds = kSteps
+      .map((StepKind s) => s.id)
+      .toList();
 
   Future<void> saveGlobalPlan(ModelPlan plan) async {
     await _prefs.setString(_kGlobalPlan, jsonEncode(plan.toJson()));

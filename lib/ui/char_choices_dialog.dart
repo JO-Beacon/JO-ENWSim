@@ -17,8 +17,10 @@ import 'common.dart';
 typedef CharModelInfo = ({
   /// 显示成什么样（“服务商 · 模型”，或“未选模型”）
   String label,
+
   /// 那个模型的能力声明。null = 我们不知道（用户自己加的模型）
   ModelCaps? caps,
+
   /// 那个协议下“思考”长什么样。isEmpty = 我们不知道
   ThinkingSpec spec,
 });
@@ -64,9 +66,7 @@ class _ChoicesDialog extends StatefulWidget {
 }
 
 class _ChoicesDialogState extends State<_ChoicesDialog> {
-  late Map<String, CharChoices> _all = <String, CharChoices>{
-    ...widget.initial,
-  };
+  late Map<String, CharChoices> _all = <String, CharChoices>{...widget.initial};
   late String _who = widget.characters.isEmpty ? '' : widget.characters.first;
 
   CharChoices get _cur => _all[_who] ?? const CharChoices();
@@ -174,8 +174,7 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
                   ),
                   decoration: BoxDecoration(
                     color: on ? p.surface : Colors.transparent,
-                    border:
-                        JoShape.border(on || hover ? p.accent : p.border),
+                    border: JoShape.border(on || hover ? p.accent : p.border),
                     borderRadius: JoShape.br,
                   ),
                   child: AnimatedDefaultTextStyle(
@@ -242,10 +241,7 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
           },
         ),
         if (caps == null)
-          _note(
-            p,
-            '这个模型没有能力声明（大概是用户自己加的），所以下面只摆通用的几样。',
-          )
+          _note(p, '这个模型没有能力声明（大概是用户自己加的），所以下面只摆通用的几样。')
         else
           _note(
             p,
@@ -254,7 +250,8 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
             ' · 输入 ${caps.inputModalities.join('/')}'
             '${caps.vision ? ' · 能看图' : ''}'
             '${caps.tools ? ' · 工具' : ''}'
-            '${caps.reasoning ? ' · 推理' : ''}',
+            '${caps.reasoning ? ' · 推理' : ''}'
+            '${caps.stream == true ? ' · 流式' : ''}',
           ),
         const SizedBox(height: JoSpace.s5),
 
@@ -291,6 +288,17 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
           value: c.stream,
           onChanged: (bool v) => _put(c.copyWith(stream: v)),
         ),
+        // 模型声明不支持流式时：这条选择**不生效**，但数据留着 ——
+        // 换回支持流式的模型就自动再生效，不用重新勾。
+        // 只对“声明了不支持”的模型这么说；没声明（不知道）的不拦。
+        if (caps != null && caps.stream == false) ...<Widget>[
+          const SizedBox(height: JoSpace.s2),
+          Text(
+            '不生效 —— 这个模型声明它不支持流式。'
+            '你的选择留着，换回支持的模型就再生效。',
+            style: JoFonts.meta.copyWith(color: p.accent, fontSize: 10),
+          ),
+        ],
         if (spec.levels.isNotEmpty) ...<Widget>[
           const SizedBox(height: JoSpace.s4),
           _label(p, '推理等级'),
@@ -298,11 +306,21 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
             spacing: JoSpace.s2,
             runSpacing: JoSpace.s2,
             children: <Widget>[
-              _chip(p, '不设', '', c.effortLevel,
-                  (String v) => _put(c.copyWith(effortLevel: v))),
+              _chip(
+                p,
+                '不设',
+                '',
+                c.effortLevel,
+                (String v) => _put(c.copyWith(effortLevel: v)),
+              ),
               for (final String v in spec.levels)
-                _chip(p, v, v, c.effortLevel,
-                    (String x) => _put(c.copyWith(effortLevel: x))),
+                _chip(
+                  p,
+                  v,
+                  v,
+                  c.effortLevel,
+                  (String x) => _put(c.copyWith(effortLevel: x)),
+                ),
             ],
           ),
         ],
@@ -375,16 +393,16 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
   }
 
   Widget _note(JoPalette p, String text) => Padding(
-        padding: const EdgeInsets.only(top: JoSpace.s2),
-        child: Text(
-          text,
-          style: JoFonts.meta.copyWith(
-            color: p.secondary,
-            fontSize: 10,
-            height: 1.7,
-          ),
-        ),
-      );
+    padding: const EdgeInsets.only(top: JoSpace.s2),
+    child: Text(
+      text,
+      style: JoFonts.meta.copyWith(
+        color: p.secondary,
+        fontSize: 10,
+        height: 1.7,
+      ),
+    ),
+  );
 
   Widget _footer(BuildContext context, JoPalette p) {
     return Container(
@@ -415,10 +433,10 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
   }
 
   Widget _label(JoPalette p, String text) => Padding(
-        padding: const EdgeInsets.only(bottom: JoSpace.s2),
-        child: Text(
-          text,
-          style: JoFonts.meta.copyWith(color: p.secondary, letterSpacing: 1.5),
-        ),
-      );
+    padding: const EdgeInsets.only(bottom: JoSpace.s2),
+    child: Text(
+      text,
+      style: JoFonts.meta.copyWith(color: p.secondary, letterSpacing: 1.5),
+    ),
+  );
 }
