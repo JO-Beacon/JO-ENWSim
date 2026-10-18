@@ -21,8 +21,44 @@ class ProbeResult {
 class ProviderApi {
   static const Duration _timeout = Duration(seconds: 20);
 
+  /// 连通性测试：**只回答“通不通、key 对不对”，不改任何配置**。
+  ///
+  /// · DeepSeek：用余额接口——它最轻，而且必须带对的 key 才回 200。
+  /// · 其它 OpenAI 兼容：请求 `/models` 只看状态码，**不解析、不返回模型列表**，
+  ///   免得“测试”变成“拉模型”（那是 `fetchModels` 的事，会写回配置）。
+  ///
+  /// 所以返回的 [ProbeResult.models] 永远是空。
+  static Future<ProbeResult> probe(Provider p, {http.Client? client}) async {
+    if (p.protocol.isDeepSeek) return fetchBalance(p, client: client);
+    final Uri? uri = _modelsUri(p);
+    if (uri == null) {
+      return const ProbeResult(ok: false, message: '接口地址填得不对');
+    }
+    try {
+      final http.Response r = await (client ?? http.Client())
+          .get(uri, headers: _headers(p))
+          .timeout(_timeout);
+      if (r.statusCode < 200 || r.statusCode >= 300) {
+        return ProbeResult(
+          ok: false,
+          message: _httpMessage(
+            r.statusCode,
+            r.body,
+            deepSeek: p.protocol.isDeepSeek,
+          ),
+        );
+      }
+      return ProbeResult(ok: true, message: '连上了（HTTP ${r.statusCode}），key 可用');
+    } catch (e) {
+      return ProbeResult(ok: false, message: '连不上：$e');
+    }
+  }
+
   /// 查余额（目前只有 DeepSeek 有公开的余额接口）。
-  static Future<ProbeResult> fetchBalance(Provider p) async {
+  static Future<ProbeResult> fetchBalance(
+    Provider p, {
+    http.Client? client,
+  }) async {
     if (!p.protocol.isDeepSeek) {
       return const ProbeResult(ok: false, message: '这个服务商没有余额接口');
     }
@@ -32,7 +68,7 @@ class ProviderApi {
       return const ProbeResult(ok: false, message: '接口地址填得不对');
     }
     try {
-      final http.Response r = await http
+      final http.Response r = await (client ?? http.Client())
           .get(uri, headers: _headers(p))
           .timeout(_timeout);
       if (r.statusCode < 200 || r.statusCode >= 300) {
@@ -47,8 +83,12 @@ class ProviderApi {
     }
   }
 
-  /// 拉模型列表。成功 = 连上了。
-  static Future<ProbeResult> fetchModels(Provider p) async {
+  /// 拉模型列表。**这是“获取模型”** —— 调用方拿到 ids 会写回配置，
+  /// 所以别拿它当“测试”用（那个用 [probe]）。
+  static Future<ProbeResult> fetchModels(
+    Provider p, {
+    http.Client? client,
+  }) async {
     if (p.protocol.listPath == null) {
       return ProbeResult(ok: false, message: '${p.protocol.label}这个协议没有模型列表接口');
     }
@@ -57,7 +97,7 @@ class ProviderApi {
       return const ProbeResult(ok: false, message: '接口地址填得不对');
     }
     try {
-      final http.Response r = await http
+      final http.Response r = await (client ?? http.Client())
           .get(uri, headers: _headers(p))
           .timeout(_timeout);
       if (r.statusCode < 200 || r.statusCode >= 300) {

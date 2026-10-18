@@ -10,6 +10,7 @@ import 'model/model_plan.dart';
 import 'model/provider.dart';
 import 'theme/settings_store.dart';
 import 'theme/tokens.dart';
+import 'ui/jo_localizations.dart';
 import 'ui/workspace.dart';
 
 /// 把本应用自己的许可也塞进 Flutter 的许可清单。
@@ -237,6 +238,13 @@ class _JoEnwsAppState extends State<JoEnwsApp>
     return MaterialApp(
       title: 'JO-ENWSim',
       debugShowCheckedModeBanner: false,
+      // 输入框的选中菜单文字取自 Cupertino 本地化；不挂代理就是英文
+      // （Cut / Copy / Paste / Select all）。自定义这份只改那几个词。
+      localizationsDelegates: const <LocalizationsDelegate<dynamic>>[
+        JoCupertinoLocalizationsDelegate(),
+        DefaultMaterialLocalizations.delegate,
+        DefaultWidgetsLocalizations.delegate,
+      ],
       theme: ThemeData(
         useMaterial3: false,
         fontFamily: JoFonts.sans,

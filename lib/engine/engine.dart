@@ -51,6 +51,7 @@ class EngineInput {
     this.memories = const <MemoryBook>[],
     this.recentSteps = 12,
     this.prompts = const <String, String>{},
+    this.onStep,
   });
 
   final WorldStore store;
@@ -64,7 +65,7 @@ class EngineInput {
   final ModelPlan worldPlan;
   final Map<String, ModelPlan> charPlans;
 
-  /// 每个角色的「选择」（温度、流式、思考…）。
+  /// 每个角色的“选择”（温度、流式、思考…）。
   final Map<String, CharChoices> charChoices;
 
   /// 记忆：上帝那本 + 各角色那本。
@@ -73,6 +74,16 @@ class EngineInput {
   /// 提示词里带多少步最近的回合。太少会失忆，太多会撑爆——
   /// 而且缓存前缀会更容易被打断。
   final int recentSteps;
+
+  /// 每**进一个步骤**时喊一声（`A0` / `AD` / `A1` / `A2` / `B1` / `A3` / `B2` / `A4`）。
+  ///
+  /// 只是报进度，不动任何逻辑：右栏那张流程图靠它高亮当前步。
+  /// B₁ 是按角色一个个跑的，IDs 相同，会喊多次。
+  /// 每**进一个步骤**时喊一声（`A0` / `AD` / `A1` / `A2` / `B1` / `A3` / `B2` / `A4`）。
+  ///
+  /// 只是报进度，不动任何逻辑：右栏那张流程图靠它高亮当前步。
+  /// B₁ 是按角色一个个跑的，IDs 相同，会喊多次。
+  final void Function(String stepId)? onStep;
 
   /// 每一步的提示词（用户在设置 → 引擎里填的）。
   ///
@@ -96,7 +107,7 @@ class Engine {
 
   /// 跑**单步**用的（内部）。
   ///
-  /// 界面上那个「单步」不是这个 —— 它跑的是 [runTurn]（一整条流程）。
+  /// 界面上那个“单步”不是这个 —— 它跑的是 [runTurn]（一整条流程）。
   /// 这里只是把某一步单独拉出来，给调试和将来的“逐步执行”用。
   Future<TurnStep> run(String stepId) async {
     switch (stepId) {
@@ -169,13 +180,13 @@ class Engine {
     ];
   }
 
-  /// 跑**一次完整流程** —— 界面上那个「单步」就是它。
+  /// 跑**一次完整流程** —— 界面上那个“单步”就是它。
   ///
   /// A₀ 判断要不要分裂
   ///   → A 决策：这一步做环境更新（A₁）还是角色回合（A₂ → B₁… → A₃ → B₂）
   ///   → A₄ 判断要不要合并
   ///
-  /// 注意：「单步」不是“跑某一步”，是**一整条流程**。
+  /// 注意：“单步”不是“跑某一步”，是**一整条流程**。
   Future<List<TurnStep>> runTurn() async {
     final List<TurnStep> out = <TurnStep>[];
 
@@ -282,7 +293,7 @@ class Engine {
           '不要写它的想法或决定（那是下一步的事），也不要写别人的内心。',
     );
     // B₁ 不落盘（它是过程），所以日志得在这儿补 ——
-    // 否则日志里只有四个「→ B1」，看着像全挂了。
+    // 否则日志里只有四个“→ B1”，看着像全挂了。
     _say(
       '← B1  ${c.step.ok ? 'ok' : '错'}  感知${c.step.text.length}字'
       '${c.step.ok ? '' : '  ${c.step.error}'}',
@@ -341,6 +352,9 @@ class Engine {
     String focus = '',
     String extra = '',
   }) async {
+    // 报进度：所有步骤都从这里过，所以只在这里喊一声就够。
+    input.onStep?.call(stepId);
+
     final String model = _modelFor(stepId, focus);
     // 模型是空的就别发 —— 发出去只会换来一个 400，
     // 而且用户看不出是“没选模型”还是“模型名写错了”。
@@ -351,8 +365,8 @@ class Engine {
           who: who,
           error:
               '还没给这一步选模型。\n'
-              '去 设置 → 引擎 里配一个（或在世界的「模型」页里配），'
-              '填好之后再点「单步」。',
+              '去 设置 → 引擎 里配一个（或在世界的“模型”页里配），'
+              '填好之后再点“单步”。',
         ),
         usage: null,
       );
@@ -378,15 +392,19 @@ class Engine {
         LlmRequest(
           // 发出去的是**模型名**（`deepseek-flash`），不是拼出来的键。
           model: _keyOf(model),
-          messages: <LlmMessage>[
-            LlmMessage('system', system),
-            LlmMessage('user', user),
-          ],
+          // system 用**顶层参数**：Anthropic 形状就认这个；OpenAI 形状
+          // 会在 `toJson()` 里拼回 messages 的一条，两种形状都不丢。
+          system: system,
+          messages: <LlmMessage>[LlmMessage('user', user)],
           thinking: choices?.stream == null ? true : null,
           temperature: _num(choices?.temperature),
           topP: _num(choices?.topP),
           maxTokens: _int(choices?.maxOutput),
           jsonMode: true,
+          // 内置搜索是**模型服务**上的开关（只有 Anthropic 形状有）。
+          webSearch: input.provider.builtinSearch
+              ? input.provider.builtinSearchShape
+              : BuiltinSearch.none,
         ),
       );
       last = r;
@@ -454,7 +472,7 @@ class Engine {
   }
 
   /// 系统提示词。**稳定的部分在这儿**，每回合变的放 [user]。
-  /// 系统提示词。**按「各步骤读什么」分视角** —— 架构里那张表。
+  /// 系统提示词。**按“各步骤读什么”分视角** —— 架构里那张表。
   ///
   /// 差别全在历史那一段：
   ///   · A 侧（[focus] 为空，全知）：本序列上发生的一切

@@ -1,4 +1,4 @@
-// 右栏底部的「编辑」按钮，以及它打开的**大编辑弹窗**。
+// 右栏底部的“编辑”按钮，以及它打开的**大编辑弹窗**。
 //
 // 弹窗里是三个标签页：世界观 / 记忆 / 模型。
 // 状态集中在弹窗里，保存时一次性交回去。
@@ -13,7 +13,7 @@ import 'common.dart';
 import 'memory_panel.dart';
 import 'model_plan_dialog.dart';
 
-/// 底部常驻的「编辑」按钮。
+/// 底部常驻的“编辑”按钮。
 class WorldEditButton extends StatelessWidget {
   const WorldEditButton({
     super.key,
@@ -54,7 +54,7 @@ typedef WorldEditResult = ({
   String setting,
   String opening,
 
-  /// 用户在「常规」里点了删除世界。
+  /// 用户在“常规”里点了删除世界。
   bool delete,
 });
 
@@ -691,7 +691,7 @@ class _EditDialogState extends State<_EditDialog> {
         children: <Widget>[
           Expanded(
             child: Text(
-              '常规里改世界名；角色在「角色」里。',
+              '常规里改世界名；角色在“角色”里。',
               style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
             ),
           ),
@@ -737,16 +737,16 @@ class _Area extends StatelessWidget {
         border: JoShape.border(p.border),
         borderRadius: JoShape.br,
       ),
-      child: TextField(
-        controller: controller,
-        maxLines: lines,
-        minLines: lines,
-        style: s.bodyStyle(p.text).copyWith(fontSize: 14),
-        cursorColor: p.accent,
-        decoration: InputDecoration(
-          isDense: true,
-          border: InputBorder.none,
-          hintText: hint,
+      // 原来的 `TextField` 靠 `minLines: lines` 撑高度；`JoTextField` 没这个
+      // 参数，所以按行高（14 号字 × 1.75）给个最小高度。
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: lines * 14 * 1.75),
+        child: JoTextField(
+          controller: controller,
+          maxLines: lines,
+          verticalPadding: 0,
+          style: s.bodyStyle(p.text).copyWith(fontSize: 14),
+          hint: hint,
           hintStyle: s.bodyStyle(p.secondary).copyWith(fontSize: 14),
         ),
       ),

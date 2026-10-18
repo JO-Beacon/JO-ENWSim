@@ -11,6 +11,7 @@ import 'package:flutter/widgets.dart';
 /// 动作 id。
 class JoKey {
   static const String send = 'send';
+  static const String newline = 'newline';
   static const String newWorld = 'newWorld';
   static const String edit = 'edit';
   static const String settings = 'settings';
@@ -24,7 +25,10 @@ typedef JoKeyItem = ({String id, String label, String fallback});
 /// **不含 Esc。** Esc 是多功能键（关弹窗、取消、退出），
 /// 它只做“弹窗自己那件事”，不归快捷键系统管。
 const List<JoKeyItem> kJoKeys = <JoKeyItem>[
-  (id: JoKey.send, label: '发送', fallback: 'Enter'),
+  // 发言框是多行的，两个动作各占一个键，都能在设置里改。
+  // 默认：回车换行（多行框的直觉）、Ctrl+回车发送（不会误发）。
+  (id: JoKey.send, label: '发送', fallback: 'Ctrl+Enter'),
+  (id: JoKey.newline, label: '换行', fallback: 'Enter'),
   (id: JoKey.newWorld, label: '新建世界', fallback: 'Ctrl+N'),
   (id: JoKey.edit, label: '编辑这个世界', fallback: 'Ctrl+E'),
   (id: JoKey.settings, label: '打开设置', fallback: 'Ctrl+,'),
@@ -34,6 +38,57 @@ const List<JoKeyItem> kJoKeys = <JoKeyItem>[
 Map<String, String> joDefaultKeys() => <String, String>{
   for (final JoKeyItem k in kJoKeys) k.id: k.fallback,
 };
+
+/// 某个动作的默认键位。界面取值时用它，**不要再在别处写死字符串** ——
+/// 否则默认值一改，这里忘了改，实际行为就不是表里看到的那个。
+String joFallback(String id) =>
+    kJoKeys.firstWhere((JoKeyItem k) => k.id == id).fallback;
+
+/// 两个键位字符串是不是**同一个实际按键**。
+///
+/// 大小写、空格、修饰键顺序都不计较；`esc` / `escape`、`ctrl` / `control`
+/// 这类同义词也归一。空串跟任何东西都不相等（= 没绑）。
+bool joSameKey(String a, String b) {
+  final String x = _joNormKey(a);
+  return x.isNotEmpty && x == _joNormKey(b);
+}
+
+String _joNormKey(String s) {
+  final List<String> parts = s
+      .toLowerCase()
+      .split('+')
+      .map((String p) => p.trim())
+      .where((String p) => p.isNotEmpty)
+      .map(
+        (String p) => switch (p) {
+          'control' => 'ctrl',
+          'esc' => 'escape',
+          _ => p,
+        },
+      )
+      .toList();
+  if (parts.isEmpty) return '';
+  final String key = parts.removeLast();
+  parts.sort();
+  return <String>[...parts, key].join('+');
+}
+
+/// 把 [id] 设成 [spec]，并且把**用着同一个键**的其它动作清空（变成未设置）。
+///
+/// 一个键只能给一个动作用：后设的赢，先设的让位。
+Map<String, String> joSetKey(Map<String, String> keys, String id, String spec) {
+  final Map<String, String> next = <String, String>{...keys};
+  final String want = spec.trim();
+  if (want.isNotEmpty) {
+    for (final JoKeyItem k in kJoKeys) {
+      if (k.id == id) continue;
+      final String cur = next[k.id] ?? k.fallback;
+      if (joSameKey(cur, want)) next[k.id] = '';
+    }
+  }
+  next[id] = spec;
+  return next;
+}
 
 /// 把键位字符串解析成 Flutter 的快捷键。
 ///

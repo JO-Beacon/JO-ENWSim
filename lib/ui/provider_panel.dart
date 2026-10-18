@@ -1,5 +1,6 @@
 import 'package:flutter/material.dart';
 
+import '../model/search_api.dart';
 import '../model/provider.dart';
 import '../model/provider_api.dart';
 import '../theme/tokens.dart';
@@ -404,9 +405,17 @@ class _ProviderPanelState extends State<ProviderPanel> {
                 provider: x,
                 onEdit: (String v) => _replace(x.copyWith(apiKey: v)),
               ),
+              // 搜索类服务：直接在这里试搜一条，能看到到底通不通。
+              if (x.kind == ServiceKind.search) ...<Widget>[
+                const SizedBox(height: JoSpace.s5),
+                _label(p, '试搜一下'),
+                _SearchTry(palette: p, provider: x),
+              ],
               const SizedBox(height: JoSpace.s5),
               _label(p, '接口'),
-              if (x.custom == null)
+              if (x.kind == ServiceKind.search)
+                ..._searchEndpoints(p, x)
+              else if (x.custom == null)
                 // 预设来的：端点是死的事实，只读。
                 Text(x.endpoint, style: JoFonts.meta.copyWith(color: p.text))
               else ...<Widget>[
@@ -422,7 +431,39 @@ class _ProviderPanelState extends State<ProviderPanel> {
                   onChanged: (String v) => _replace(x.copyWith(apiPath: v)),
                 ),
               ],
-              if (x.protocol.wire == Wire.openai &&
+              if (x.kind == ServiceKind.model &&
+                  x.builtinSearchShape != BuiltinSearch.none) ...<Widget>[
+                const SizedBox(height: JoSpace.s4),
+                Row(
+                  children: <Widget>[
+                    Expanded(
+                      child: Text(
+                        '内置搜索',
+                        style: JoFonts.ui.copyWith(fontSize: 13, color: p.text),
+                      ),
+                    ),
+                    JoToggle(
+                      on: x.builtinSearch,
+                      onChanged: (bool v) =>
+                          _replace(x.copyWith(builtinSearch: v)),
+                    ),
+                  ],
+                ),
+                // 形状因家而异，提示词说清楚是哪一种，不拿一套话套所有人。
+                _note(p, switch (x.builtinSearchShape) {
+                  BuiltinSearch.anthropic =>
+                    '模型自己决定搜不搜，服务端执行（Anthropic 的 web_search）。'
+                        '服务端搜的那几次会打到 Search / Fetch：2026-11-01 前免费，'
+                        '之后按 \$0.75 / 1000 次计。',
+                  BuiltinSearch.mimo =>
+                    '模型自己判断要不要搜（可强制）；需要先在 MiMo 控制台'
+                        '开通“联网服务插件”，按插件调用计费。'
+                        '一轮最多 3 个关键词（max_keyword），用来控成本。',
+                  BuiltinSearch.none => '',
+                }),
+              ],
+              if (x.kind == ServiceKind.model &&
+                  x.protocol.wire == Wire.openai &&
                   x.custom == null) ...<Widget>[
                 const SizedBox(height: JoSpace.s4),
                 Row(
@@ -446,7 +487,10 @@ class _ProviderPanelState extends State<ProviderPanel> {
                   '服务商不支持时保持关闭',
                 ),
               ],
-              if (x.protocol.isDeepSeek) ...<Widget>[
+              // 端点格式、缓存计价、峰谷价目 —— 全是**聊天接口**才有的事，
+              // 搜索/语音服务没有这些。
+              if (x.kind == ServiceKind.model &&
+                  x.protocol.isDeepSeek) ...<Widget>[
                 const SizedBox(height: JoSpace.s6),
                 ..._deepseek(p, x),
               ],
@@ -492,6 +536,53 @@ class _ProviderPanelState extends State<ProviderPanel> {
   /// DeepSeek 专属开关。
   ///
   /// 只把规则摊开，不给默认档位：要不要开思考、投入多高，都是用户自己定。
+  /// 搜索服务的“接口”：这一段只说**它到底往哪两个地址发**。
+  ///
+  /// 知道形状的就写死地址（DeepSeek / Tavily）；不知道的只把地址摆出来让人能改。
+  List<Widget> _searchEndpoints(JoPalette p, Provider x) {
+    final SearchVendor vendor = SearchService(x).vendor;
+    final String base =
+        (x.baseUrl.trim().isEmpty ? x.protocol.baseUrl : x.baseUrl.trim())
+            .replaceAll(RegExp(r'/+$'), '');
+    switch (vendor) {
+      case SearchVendor.deepseek:
+        return <Widget>[
+          Text(
+            'POST ${base.isEmpty ? 'https://api.deepseek.com' : base}/v1/tools/search',
+            style: JoFonts.meta.copyWith(color: p.text),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'POST ${base.isEmpty ? 'https://api.deepseek.com' : base}/v1/tools/fetch',
+            style: JoFonts.meta.copyWith(color: p.text),
+          ),
+          _note(p, '两个端点各自计费：\$0.75 / 1000 次（成功才计）。'),
+        ];
+      case SearchVendor.tavily:
+        return <Widget>[
+          Text(
+            'POST ${base.isEmpty ? 'https://api.tavily.com' : base}/search',
+            style: JoFonts.meta.copyWith(color: p.text),
+          ),
+          const SizedBox(height: 2),
+          Text(
+            'POST ${base.isEmpty ? 'https://api.tavily.com' : base}/extract',
+            style: JoFonts.meta.copyWith(color: p.text),
+          ),
+          _note(p, '按 API Credit 计费：basic 1 个、advanced 2 个。'),
+        ];
+      case SearchVendor.unknown:
+        return <Widget>[
+          JoInput(
+            initial: x.baseUrl,
+            hint: '服务地址',
+            onChanged: (String v) => _replace(x.copyWith(baseUrl: v)),
+          ),
+          _note(p, '这家搜索接口还没接：只知道地址，不知道请求形状。'),
+        ];
+    }
+  }
+
   List<Widget> _deepseek(JoPalette p, Provider x) => <Widget>[
     _label(p, '端点格式'),
     JoSegment<String>(
@@ -525,7 +616,7 @@ class _ProviderPanelState extends State<ProviderPanel> {
   /// 模型行点开后展开的内容。
   ///
   /// **只显示能力声明**——那是客观事实，不是给用户调的东西。
-  /// 采样策略、思考档位这类「选择」不在这儿（它们跟着角色，进聊天栏）。
+  /// 采样策略、思考档位这类“选择”不在这儿（它们跟着角色，进聊天栏）。
   Widget _modelParams(JoPalette p, Provider x, ModelRef m) {
     final ModelCaps? c = m.caps;
     return Container(
@@ -714,6 +805,9 @@ class _ProviderPanelState extends State<ProviderPanel> {
             _ProbeButton(
               palette: p,
               provider: x,
+              label: '获取模型',
+              // 这个是“拉列表并写回”，跟“测连通”是两件事。
+              grabModels: true,
               onModels: (List<String> ids) {
                 final List<ModelRef> next = <ModelRef>[...x.models];
                 for (final String id in ids) {
@@ -730,7 +824,7 @@ class _ProviderPanelState extends State<ProviderPanel> {
           Padding(
             padding: const EdgeInsets.only(top: JoSpace.s2),
             child: Text(
-              '还没有模型。点“获取”从接口拉一份，或者手动加。',
+              '还没有模型。点“获取模型”从接口拉一份，或者手动加。',
               style: JoFonts.meta.copyWith(color: p.secondary),
             ),
           ),
@@ -1023,6 +1117,13 @@ class _KeyFieldState extends State<_KeyField> {
   );
   bool _show = false;
 
+  /// 测试结果。空 = 还没测过。
+  ///
+  /// **放在整行下面**，不挤在按钮里 —— 报错文字通常很长，
+  /// 挤在按钮下面会把那一行顶得很高，也读不下。
+  String? _probe;
+  bool _probeOk = true;
+
   @override
   void dispose() {
     _c.dispose();
@@ -1073,9 +1174,31 @@ class _KeyFieldState extends State<_KeyField> {
               ),
             ),
             const SizedBox(width: JoSpace.s3),
-            _ProbeButton(palette: p, provider: widget.provider, label: '测试'),
+            // 搜索 / 语音这类没有“模型列表”可拉，探测按钮对它们没意义。
+            if (widget.provider.kind == ServiceKind.model)
+              // 只看通不通：不发拉列表那一步，不动配置。
+              _ProbeButton(
+                palette: p,
+                provider: widget.provider,
+                label: '测试',
+                onResult: (String msg, bool ok) => setState(() {
+                  _probe = msg;
+                  _probeOk = ok;
+                }),
+              ),
           ],
         ),
+        if (_probe != null)
+          Padding(
+            padding: const EdgeInsets.only(top: JoSpace.s2),
+            child: Text(
+              _probe!,
+              style: JoFonts.meta.copyWith(
+                color: _probeOk ? p.secondary : p.accent,
+                height: 1.6,
+              ),
+            ),
+          ),
       ],
     );
   }
@@ -1087,13 +1210,25 @@ class _ProbeButton extends StatefulWidget {
     required this.palette,
     required this.provider,
     this.label = '获取',
+    this.grabModels = false,
     this.onModels,
+    this.onResult,
   });
 
   final JoPalette palette;
   final Provider provider;
   final String label;
+
+  /// 成功时把模型列表交回去（= “获取模型”）。
+  ///
+  /// `false` = 只做**连通性测试**：不发“拉列表”那一步，也不碰配置。
+  final bool grabModels;
   final ValueChanged<List<String>>? onModels;
+
+  /// 把结果（文字 + 成没成）交给外面显示。
+  ///
+  /// 传了它，按钮自己就不再在下面写结果 —— 调用方决定放哪儿（比如整行下面）。
+  final void Function(String message, bool ok)? onResult;
 
   @override
   State<_ProbeButton> createState() => _ProbeButtonState();
@@ -1108,12 +1243,16 @@ class _ProbeButtonState extends State<_ProbeButton> {
       _busy = true;
       _msg = null;
     });
-    final ProbeResult r = await ProviderApi.fetchModels(widget.provider);
+    final ProbeResult r = widget.grabModels
+        ? await ProviderApi.fetchModels(widget.provider)
+        : await ProviderApi.probe(widget.provider);
     if (!mounted) return;
     setState(() {
       _busy = false;
-      _msg = r.message;
+      // 外面要显示就交给它；没人接才自己写在按钮下面。
+      if (widget.onResult == null) _msg = r.message;
     });
+    widget.onResult?.call(r.message, r.ok);
     if (r.ok) widget.onModels?.call(r.models);
   }
 
@@ -1128,7 +1267,7 @@ class _ProbeButtonState extends State<_ProbeButton> {
           color: p.accent,
           onTap: _busy ? () {} : _run,
         ),
-        if (_msg != null)
+        if (_msg != null && widget.onResult == null)
           Padding(
             padding: const EdgeInsets.only(top: 4),
             child: SizedBox(
@@ -1219,6 +1358,130 @@ class _RenameGroupDialogState extends State<_RenameGroupDialog> {
           ],
         ),
       ),
+    );
+  }
+}
+
+/// 搜索服务的“试搜一下”。
+///
+/// 目前只有 DeepSeek 的 Search / Fetch **真接了**（`deepseek_search.dart`）；
+/// 别的厂商请求形状各不相同，没接之前就如实说明，不假装能跑。
+///
+/// 提醒：这两个接口按**成功次数**计费（$0.75 / 1000 次），所以这里不自动跑，
+/// 点了才发一次。
+class _SearchTry extends StatefulWidget {
+  const _SearchTry({required this.palette, required this.provider});
+
+  final JoPalette palette;
+  final Provider provider;
+
+  @override
+  State<_SearchTry> createState() => _SearchTryState();
+}
+
+class _SearchTryState extends State<_SearchTry> {
+  final TextEditingController _q = TextEditingController();
+  bool _busy = false;
+  SearchOutcome? _out;
+
+  @override
+  void dispose() {
+    _q.dispose();
+    super.dispose();
+  }
+
+  bool get _supported =>
+      SearchService(widget.provider).vendor != SearchVendor.unknown;
+
+  Future<void> _run() async {
+    final String q = _q.text.trim();
+    if (q.isEmpty || _busy) return;
+    setState(() => _busy = true);
+    // 按服务商分发：DeepSeek 或 Tavily，谁接谁上。
+    final SearchOutcome r = await SearchService(
+      widget.provider,
+    ).search(q, count: 5);
+    if (!mounted) return;
+    setState(() {
+      _busy = false;
+      _out = r;
+    });
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final JoPalette p = widget.palette;
+    final SearchVendor vendor = SearchService(widget.provider).vendor;
+    if (!_supported) {
+      return Text(
+        '这个服务商的搜索接口还没接。目前只接了 DeepSeek 的 Search / Fetch '
+        '和 Tavily 的 Search / Extract。',
+        style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+      );
+    }
+    final SearchOutcome? out = _out;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(
+              child: JoTextField(
+                controller: _q,
+                style: JoFonts.ui.copyWith(fontSize: 13, color: p.text),
+                hint: '搜什么',
+                hintStyle: JoFonts.ui.copyWith(
+                  fontSize: 13,
+                  color: p.secondary,
+                ),
+                onSubmitted: (_) => _run(),
+              ),
+            ),
+            const SizedBox(width: JoSpace.s3),
+            JoButton(
+              text: _busy ? '搜索中' : '搜',
+              color: p.accent,
+              onTap: _busy ? () {} : _run,
+            ),
+          ],
+        ),
+        const SizedBox(height: JoSpace.s2),
+        Text(
+          // 计费口径按厂商分开：DeepSeek 按次、Tavily 按 credit。
+          switch (vendor) {
+            SearchVendor.deepseek => '按次计费：\$0.75 / 1000 次（成功才计）。点了才发，不会自己跑。',
+            SearchVendor.tavily =>
+              '按 API Credit 计费（basic 1 个、advanced 2 个）。点了才发，不会自己跑。',
+            SearchVendor.unknown => '点了才发，不会自己跑。',
+          },
+          style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
+        ),
+        if (out != null) ...<Widget>[
+          const SizedBox(height: JoSpace.s3),
+          Text(
+            out.message,
+            style: JoFonts.meta.copyWith(
+              color: out.ok ? p.secondary : p.accent,
+            ),
+          ),
+          for (final SearchHit h in out.hits) ...<Widget>[
+            const SizedBox(height: JoSpace.s3),
+            Text(
+              h.title.isEmpty ? '（无标题）' : h.title,
+              style: JoFonts.ui.copyWith(fontSize: 13, color: p.text),
+            ),
+            Text(
+              h.url,
+              style: JoFonts.meta.copyWith(color: p.accent, fontSize: 10),
+            ),
+            if (h.snippet.isNotEmpty)
+              Text(
+                h.snippet,
+                style: JoFonts.meta.copyWith(color: p.secondary, height: 1.6),
+              ),
+          ],
+        ],
+      ],
     );
   }
 }

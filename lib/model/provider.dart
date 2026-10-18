@@ -136,7 +136,7 @@ class ThinkingSpec {
 /// 各家“思考”的规矩。**全部来自官方资料，不是推的**。
 ///
 /// 这份是**程序自己的知识**，不是给用户看的设置项——
-/// 界面上不摆“思考”（那是「选择」，归角色那层，进聊天栏）。
+/// 界面上不摆“思考”（那是“选择”，归角色那层，进聊天栏）。
 /// 以后引擎发请求时按这个决定该发哪个字段。
 ///
 /// - OpenAI：`reasoning_effort` = none/minimal/low/medium/high/xhigh/max
@@ -295,7 +295,7 @@ class ModelCaps {
 /// 一个模型条目。
 ///
 /// **只有能力声明，没有选择。**
-/// 采样策略、思考档位这类「选择」不放在这儿（它们是跟着角色的，进聊天栏）。
+/// 采样策略、思考档位这类“选择”不放在这儿（它们是跟着角色的，进聊天栏）。
 class ModelRef {
   const ModelRef({
     required this.id,
@@ -389,6 +389,15 @@ enum ServiceKind {
   );
 }
 
+/// 内置搜索长什么样。**每一家不一样**，不是一个布尔能说清的：
+///
+/// · [anthropic]：Anthropic 的服务端工具（`web_search_20250305`），
+///   结果在 `web_search_tool_result` 块里；
+/// · [mimo]：小米 MiMo 的 `web_search` 工具（带 `max_keyword` 等参数），
+///   结果在 `message.annotations` 里；
+/// · [none]：这家没有内置搜索。
+enum BuiltinSearch { none, anthropic, mimo }
+
 /// 一个服务。
 class Provider {
   const Provider({
@@ -401,6 +410,7 @@ class Provider {
     this.baseUrl = '',
     this.apiPath = '',
     this.useResponsesApi = false,
+    this.builtinSearch = false,
     this.models = const <ModelRef>[],
     this.custom,
     this.kind = ServiceKind.model,
@@ -420,6 +430,25 @@ class Provider {
 
   /// 只有 OpenAI 协议用得上
   final bool useResponsesApi;
+
+  /// 内置搜索（服务端搜索工具）。
+  ///
+  /// **这是模型服务的能力**，不是搜索服务：模型自己决定搜不搜、搜什么，
+  /// 服务端执行。只对支持它的服务商有意义（看 [builtinSearchShape]）。
+  final bool builtinSearch;
+
+  /// 这家的内置搜索长什么样。
+  ///
+  /// 按**地址**认：MiMo 的平台域名是 `xiaomimimo.com`；
+  /// 其余支持内置搜索（Anthropic 形状）的服务商走 Anthropic 那套。
+  BuiltinSearch get builtinSearchShape {
+    final String base =
+        (baseUrl.trim().isEmpty ? protocol.baseUrl : baseUrl.trim())
+            .toLowerCase();
+    if (base.contains('xiaomimimo')) return BuiltinSearch.mimo;
+    if (protocol.wire == Wire.anthropic) return BuiltinSearch.anthropic;
+    return BuiltinSearch.none;
+  }
 
   final List<ModelRef> models;
 
@@ -460,6 +489,7 @@ class Provider {
     String? baseUrl,
     String? apiPath,
     bool? useResponsesApi,
+    bool? builtinSearch,
     List<ModelRef>? models,
     CustomShape? custom,
     ServiceKind? kind,
@@ -473,6 +503,7 @@ class Provider {
     baseUrl: baseUrl ?? this.baseUrl,
     apiPath: apiPath ?? this.apiPath,
     useResponsesApi: useResponsesApi ?? this.useResponsesApi,
+    builtinSearch: builtinSearch ?? this.builtinSearch,
     models: models ?? this.models,
     custom: custom ?? this.custom,
     kind: kind ?? this.kind,
@@ -488,6 +519,7 @@ class Provider {
     'baseUrl': baseUrl,
     'apiPath': apiPath,
     'useResponsesApi': useResponsesApi,
+    'builtinSearch': builtinSearch,
     'models': models.map((ModelRef m) => m.toJson()).toList(),
     'custom': custom?.name,
     'kind': kind.name,
@@ -507,6 +539,7 @@ class Provider {
       baseUrl: '${j['baseUrl'] ?? protocol.baseUrl}',
       apiPath: '${j['apiPath'] ?? protocol.apiPath}',
       useResponsesApi: j['useResponsesApi'] == true,
+      builtinSearch: j['builtinSearch'] == true,
       models: raw
           .whereType<Map<String, dynamic>>()
           .map(Provider._model)
@@ -516,7 +549,7 @@ class Provider {
     );
   }
 
-  /// 缺 = 默认；在、但认不出来 = 抛（不静默降级成「模型」/「OpenAI」）。
+  /// 缺 = 默认；在、但认不出来 = 抛（不静默降级成“模型”/“OpenAI”）。
   static ServiceKind _kindOf(Object? v) {
     if (v == null) return ServiceKind.model;
     if (v is! String) throw const FormatException('kind 不是字符串');
@@ -565,6 +598,42 @@ class ProviderPreset {
   final List<ModelRef> models;
 }
 
+/// 小米 MiMo 的预设模型。
+///
+/// 能力声明照官方“模型列表”页（`AGENTS/docs-mimo/model-list.md`）：
+/// 上下文 1M、最大输出 128K，支持联网搜索（内置）与全模态理解。
+/// 注意：`mimo-v2.5-pro` / `mimo-v2.5` 于 2026-10-21 下线，不列入。
+const List<ModelRef> kMimoModels = <ModelRef>[
+  ModelRef(
+    id: 'mimo-v2.6-pro',
+    group: 'MiMo',
+    caps: ModelCaps(
+      contextWindow: '1M',
+      maxOutput: '128K',
+      inputModalities: <String>['文本', '图片', '音频', '视频'],
+      outputModalities: <String>['文本'],
+      tools: true,
+      reasoning: true,
+      vision: true,
+      stream: true,
+    ),
+  ),
+  ModelRef(
+    id: 'mimo-v2.6-flash',
+    group: 'MiMo',
+    caps: ModelCaps(
+      contextWindow: '1M',
+      maxOutput: '128K',
+      inputModalities: <String>['文本', '图片', '音频', '视频'],
+      outputModalities: <String>['文本'],
+      tools: true,
+      reasoning: true,
+      vision: true,
+      stream: true,
+    ),
+  ),
+];
+
 const List<ProviderPreset> kProviderPresets = <ProviderPreset>[
   ProviderPreset(
     name: 'OpenAI',
@@ -592,6 +661,22 @@ const List<ProviderPreset> kProviderPresets = <ProviderPreset>[
     protocol: Protocol.deepseekAnthropic,
     baseUrl: 'https://api.deepseek.com/anthropic',
     models: kDeepSeekModels,
+  ),
+  // 小米 MiMo：两种形状都给。它家的“联网搜索”是**内置**的（服务端工具），
+  // 不是独立的搜索 API。文档：AGENTS/docs-mimo/
+  ProviderPreset(
+    name: '小米 MiMo',
+    protocol: Protocol.openaiCompatible,
+    baseUrl: 'https://api.xiaomimimo.com/v1',
+    apiPath: '/chat/completions',
+    models: kMimoModels,
+  ),
+  ProviderPreset(
+    name: '小米 MiMo · Anthropic 格式',
+    protocol: Protocol.anthropicCompatible,
+    baseUrl: 'https://api.xiaomimimo.com/anthropic',
+    apiPath: '/messages',
+    models: kMimoModels,
   ),
   ProviderPreset(
     name: '硅基流动',
@@ -641,6 +726,14 @@ const List<ProviderPreset> kProviderPresets = <ProviderPreset>[
 /// 接口形状暂时借用 OpenAI 那一套（只影响鉴权头与请求体形状；
 /// 这两类服务现在还不真发请求）。
 const List<ProviderPreset> kSearchPresets = <ProviderPreset>[
+  // DeepSeek 的 Search / Fetch 是目前唯一**真接了**的一家：
+  // POST /v1/tools/search、/v1/tools/fetch，Bearer 鉴权，按次计费。
+  // 文档：`AGENTS/docs-deepseek/guide-search-fetch.md`
+  ProviderPreset(
+    name: 'DeepSeek',
+    protocol: Protocol.deepseek,
+    baseUrl: 'https://api.deepseek.com',
+  ),
   ProviderPreset(
     name: 'Tavily',
     protocol: Protocol.openaiCompatible,

@@ -423,7 +423,7 @@ class _SettingsPageState extends State<SettingsPage> {
                   value: widget.settings.followSystem
                       ? 'system'
                       : (widget.settings.isDark ? 'dark' : 'light'),
-                  // 选「跟随系统」时**保留** isDark —— 那是上次选的那套，
+                  // 选“跟随系统”时**保留** isDark —— 那是上次选的那套，
                   // 以后关掉跟随时要回到它。
                   onChanged: (String v) => widget.onChanged(
                     widget.settings.copyWith(
@@ -496,7 +496,8 @@ class _SettingsPageState extends State<SettingsPage> {
           Text(
             '点一下那块，然后按你要的组合键，就记下了。\n'
             '想退出捕获就点别处；按 Esc 则清除这一条（变成未设置）。'
-            '认不出来的键会当场标出来。',
+            '认不出来的键会当场标出来。\n'
+            '同一个键只能给一个动作用：后设的那个赢，先设的那个会被清空。',
             style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
           ),
           const SizedBox(height: JoSpace.s5),
@@ -518,8 +519,10 @@ class _SettingsPageState extends State<SettingsPage> {
                       flex: 3,
                       child: JoKeyField(
                         spec: widget.keys[k.id] ?? k.fallback,
+                        // 同一个键只能给一个动作：后设的赢，用着这个键的其它动作清空
+                        // （变成“未设置”，不会默默跟着默认值跑）。
                         onChanged: (String v) => widget.onKeysChanged(
-                          <String, String>{...widget.keys, k.id: v},
+                          joSetKey(widget.keys, k.id, v),
                         ),
                       ),
                     ),
@@ -552,7 +555,7 @@ class _SettingsPageState extends State<SettingsPage> {
           ),
           const SizedBox(height: JoSpace.s4),
           Text(
-            '「发送」这条落在输入框上，其余几条是全局的。'
+            '“发送”这条落在输入框上，其余几条是全局的。'
             '改完立刻生效，也存在本地。',
             style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
           ),
@@ -562,7 +565,10 @@ class _SettingsPageState extends State<SettingsPage> {
       case 7: // 引擎
         return <Widget>[
           Text(
-            '引擎还没接入：这里填的提示词暂时不会被用到。',
+            // 别写“还没接入”——引擎真的在读这份（engine.dart 里按步取
+            // `prompts[stepId]`，用户填什么就用什么）。
+            '这里填的就是引擎每次跑时用的提示词，改完立刻生效。'
+            '某一步留空就用内置默认。',
             style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
           ),
           if (widget.globalPlanNote != null) ...<Widget>[
@@ -580,17 +586,20 @@ class _SettingsPageState extends State<SettingsPage> {
         ];
       case 8: // 数据
         return <Widget>[
+          // 这些是**事实**，不是打算：世界和回合已经真落在 SQLite 里了，
+          // 关掉再开还在。还写“还没接入”就是界面在骗人。
           JoSection(
-            title: '存档（还没接入）',
+            title: '存档',
             children: <Widget>[
-              _pending('位置', '存档放哪'),
-              _pending('历史', '每回合存一版，AI 只读最新，旧版不删'),
-              _pending('格式', 'SQLite'),
+              _kv(p, '位置', '应用数据目录下的 joenws.db'),
+              _kv(p, '格式', 'SQLite'),
+              _kv(p, '存什么', '世界、每一步、记忆'),
+              _kv(p, '历史', '每一步追加一行，旧的不删'),
             ],
           ),
           const SizedBox(height: JoSpace.s5),
           JoSection(
-            title: '导入 / 导出',
+            title: '导入 / 导出（还没做）',
             children: <Widget>[
               _pending('导出世界', '打包成一个文件'),
               _pending('导入世界', '从文件读回来'),
@@ -812,16 +821,19 @@ class _Area extends StatelessWidget {
         border: JoShape.border(p.border),
         borderRadius: JoShape.br,
       ),
-      child: TextField(
-        controller: controller,
-        minLines: 4,
-        maxLines: null,
-        style: JoFonts.meta.copyWith(color: p.text, fontSize: 12, height: 1.7),
-        cursorColor: p.accent,
-        decoration: InputDecoration(
-          isDense: true,
-          border: InputBorder.none,
-          hintText: hint,
+      // 现在 `TextField` 带 `minLines: 4` 的“起步高度”，
+      // `JoTextField` 没这个参数，所以用 `ConstrainedBox` 给一个最小高度。
+      child: ConstrainedBox(
+        constraints: const BoxConstraints(minHeight: 4 * 20.4),
+        child: JoTextField(
+          controller: controller,
+          maxLines: null,
+          style: JoFonts.meta.copyWith(
+            color: p.text,
+            fontSize: 12,
+            height: 1.7,
+          ),
+          hint: hint,
           hintStyle: JoFonts.meta.copyWith(color: p.secondary),
         ),
       ),

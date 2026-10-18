@@ -1,7 +1,7 @@
 // 画布排版（换地点线必须走空档）的测试。
 //
 // 这块原来藏在 `_WorkspaceState` 里，只能靠手点看效果；抽成纯函数之后，
-// 「往上走的换地点」「竖段被卡挡住」这两条路径可以钉住。
+// “往上走的换地点”“竖段被卡挡住”这两条路径可以钉住。
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:joenws/model/demo.dart';

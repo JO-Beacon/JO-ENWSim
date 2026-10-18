@@ -44,6 +44,8 @@ class LlmRequest {
     this.topP,
     this.maxTokens,
     this.jsonMode = false,
+    this.system,
+    this.webSearch = BuiltinSearch.none,
   });
 
   final String model;
@@ -67,10 +69,28 @@ class LlmRequest {
   /// 开了要让提示词里出现 "json" 字样并给出格式示例（官方三条硬要求之二）。
   final bool jsonMode;
 
+  /// 顶层 system。
+  ///
+  /// **Anthropic 形状**里 system 是顶层参数；OpenAI 形状没有这个位置，
+  /// 会拼成 `messages` 里一条 `role: system`。
+  final String? system;
+
+  /// 内置搜索。**形状按服务商不同**（看 `BuiltinSearch`）：
+  ///
+  /// · [BuiltinSearch.anthropic]：Anthropic 的 `web_search_20250305` server tool；
+  /// · [BuiltinSearch.mimo]：MiMo 的 `web_search` 工具（OpenAI 形状的 tools）。
+  ///
+  /// 它在**模型服务**上开关，不在搜索服务里。
+  final BuiltinSearch webSearch;
+
   Map<String, Object?> toJson() {
     final Map<String, Object?> body = <String, Object?>{
       'model': model,
-      'messages': messages.map((LlmMessage m) => m.toJson()).toList(),
+      'messages': <Object?>[
+        if ((system ?? '').trim().isNotEmpty)
+          LlmMessage('system', system!.trim()).toJson(),
+        ...messages.map((LlmMessage m) => m.toJson()),
+      ],
     };
     final bool? think = thinking;
     if (think != null) {
@@ -84,6 +104,71 @@ class LlmRequest {
     if (maxTokens != null) body['max_tokens'] = maxTokens;
     if (jsonMode) {
       body['response_format'] = <String, Object?>{'type': 'json_object'};
+    }
+    // MiMo 的内置搜索走的是 **OpenAI 形状的 tools**（不是 function）。
+    // 参数照 `AGENTS/docs-mimo/web-search.md`：
+    //   max_keyword 控成本（一轮最多几个关键词）、force_search = 强制搜（false = 让模型判断）、
+    //   limit 是每条来源的条数上限。
+    if (webSearch == BuiltinSearch.mimo) {
+      body['tools'] = <Object?>[
+        <String, Object?>{
+          'type': 'web_search',
+          'max_keyword': 3,
+          'force_search': false,
+          'limit': 1,
+        },
+      ];
+      body['tool_choice'] = 'auto';
+    }
+    return body;
+  }
+
+  /// Anthropic 形状（`/anthropic/messages`）。
+  ///
+  /// 差异（照 `AGENTS/docs-deepseek/guide-anthropic.md`）：
+  /// · `system` 是**顶层参数**，不放在 messages 里；
+  /// · `max_tokens` 必填（这里给个上限，调用方传了就用自己的）；
+  /// · 思考开关还是 `thinking`，但“力度”在 `output_config.effort`；
+  /// · 内置搜索是 `tools` 里一个 **server tool**（不是我们定义的 function）。
+  Map<String, Object?> toAnthropicJson() {
+    final Map<String, Object?> body = <String, Object?>{
+      'model': model,
+      'max_tokens': maxTokens ?? 4096,
+      'messages': <Object?>[
+        for (final LlmMessage m in messages)
+          if (m.role != 'system')
+            <String, Object?>{
+              'role': m.role,
+              'content': <Object?>[
+                <String, Object?>{'type': 'text', 'text': m.content},
+              ],
+            },
+      ],
+    };
+    final String sys = (system ?? '').trim();
+    if (sys.isNotEmpty) body['system'] = sys;
+    final bool? think = thinking;
+    if (think != null) {
+      body['thinking'] = <String, Object?>{
+        'type': think ? 'enabled' : 'disabled',
+      };
+    }
+    if (effort != null) {
+      body['output_config'] = <String, Object?>{'effort': effort};
+    }
+    if (temperature != null) body['temperature'] = temperature;
+    if (topP != null) body['top_p'] = topP;
+    if (webSearch == BuiltinSearch.anthropic) {
+      body['tools'] = <Object?>[
+        <String, Object?>{
+          // Anthropic 的 server tool 写法。DeepSeek 文档只写了
+          // “`server_tool_use` / `web_search_tool_result` 支持”，
+          // 没写声明长什么样，所以先按 Anthropic 官方那种声明。
+          'type': 'web_search_20250305',
+          'name': 'web_search',
+          'max_uses': 5,
+        },
+      ];
     }
     return body;
   }
@@ -104,6 +189,14 @@ class LlmUsage {
   final int cacheMiss;
 }
 
+/// 内置搜索捞到的一条来源（Anthropic 形状的 `web_search_result`）。
+class LlmSource {
+  const LlmSource({required this.title, required this.url});
+
+  final String title;
+  final String url;
+}
+
 /// 一次调用的结果。
 class LlmReply {
   const LlmReply({
@@ -112,6 +205,8 @@ class LlmReply {
     this.usage,
     this.error,
     this.errorCode,
+    this.sources = const <LlmSource>[],
+    this.searches = 0,
   });
 
   final String text;
@@ -120,6 +215,12 @@ class LlmReply {
   final String? reasoning;
 
   final LlmUsage? usage;
+
+  /// 内置搜索返回的来源（只有 Anthropic 形状有；没开就是空）。
+  final List<LlmSource> sources;
+
+  /// 这次模型自己搜了几次（`server_tool_use` 的个数）。
+  final int searches;
 
   /// 出错时给人看的一句话；没错就是 null。
   final String? error;
@@ -144,19 +245,43 @@ class LlmClient {
   static Future<LlmReply> send(
     Provider provider,
     String apiKey,
-    LlmRequest req,
-  ) async {
-    if (provider.protocol != Protocol.deepseek) {
+    LlmRequest req, {
+    http.Client? client,
+  }) async {
+    final Wire wire = provider.protocol.wire;
+    if (wire != Wire.openai && wire != Wire.anthropic) {
       return LlmReply(error: '这个协议还没接：${provider.protocol.label}');
+    }
+    // 内置搜索的形状得跟协议对得上，否则发了也是无效参数。
+    if (req.webSearch != BuiltinSearch.none) {
+      if (req.webSearch == BuiltinSearch.anthropic && wire != Wire.anthropic) {
+        return const LlmReply(error: 'Anthropic 的内置搜索只能用在 Anthropic 格式的服务商上');
+      }
+      if (req.webSearch == BuiltinSearch.mimo && wire != Wire.openai) {
+        return const LlmReply(
+          error: 'MiMo 的内置搜索只在 OpenAI 格式（chat/completions）下支持',
+        );
+      }
     }
     if (apiKey.trim().isEmpty) {
       return const LlmReply(error: '这个服务商还没填 API Key');
     }
 
-    final Uri uri = Uri.parse(
-      '${provider.protocol.baseUrl}${provider.protocol.apiPath}',
+    // **用服务商自己的地址**（baseUrl / apiPath 可以覆盖协议默认值）。
+    // 早先这里拼的是 protocol 的默认值，结果任何“预设带自定义地址”的服务商
+    // 都发不到自己的地址上。
+    final Uri uri = Uri.parse(provider.endpoint);
+    final String payload = jsonEncode(
+      wire == Wire.anthropic ? req.toAnthropicJson() : req.toJson(),
     );
-    final String payload = jsonEncode(req.toJson());
+    final Map<String, String> headers = <String, String>{
+      // **必须带 charset**：http 包不写时按 latin1 编码请求体，中文会抛。
+      'Content-Type': 'application/json; charset=utf-8',
+      if (wire == Wire.anthropic)
+        'x-api-key': apiKey
+      else
+        'Authorization': 'Bearer $apiKey',
+    };
 
     // 退避：0.5s → 1s → 2s。总共 4 次尝试。
     int waitMs = 500;
@@ -164,15 +289,8 @@ class LlmClient {
       http.Response? res;
       String? netError;
       try {
-        res = await http
-            .post(
-              uri,
-              headers: <String, String>{
-                'Content-Type': 'application/json',
-                'Authorization': 'Bearer $apiKey',
-              },
-              body: payload,
-            )
+        res = await (client ?? http.Client())
+            .post(uri, headers: headers, body: payload)
             .timeout(const Duration(minutes: 5));
       } on TimeoutException {
         netError = '超时（5 分钟没有响应）';
@@ -190,7 +308,9 @@ class LlmClient {
       }
 
       if (res.statusCode == 200) {
-        return _parseOk(res.body);
+        return wire == Wire.anthropic
+            ? _parseAnthropic(res.body)
+            : _parseOk(res.body);
       }
 
       if (_retryable.contains(res.statusCode) && attempt < 3) {
@@ -223,14 +343,97 @@ class LlmClient {
 
       final String text = '${msg['content'] ?? ''}';
       final Object? rc = msg['reasoning_content'];
+      // 内置搜索的来源：MiMo 把引用放在 `message.annotations`（url_citation）。
+      final List<LlmSource> sources = <LlmSource>[];
+      final Object? ann = msg['annotations'];
+      if (ann is List) {
+        for (final Object? a in ann) {
+          if (a is! Map) continue;
+          if ('${a['type']}' != 'url_citation') continue;
+          sources.add(
+            LlmSource(title: '${a['title'] ?? ''}', url: '${a['url'] ?? ''}'),
+          );
+        }
+      }
       return LlmReply(
         text: text,
         reasoning: rc is String && rc.isNotEmpty ? rc : null,
         usage: _usageOf(j['usage']),
+        sources: sources,
       );
     } catch (e) {
       return LlmReply(error: '解析失败：$e');
     }
+  }
+
+  /// Anthropic 形状的响应。
+  ///
+  /// `content` 是一组块，不是一个字符串：
+  /// · `text` → 正文；`thinking` → 思维链；
+  /// · `server_tool_use` → 模型发起了一次内置搜索（计数用）；
+  /// · `web_search_tool_result` → 该次搜索的来源（title/url）。
+  ///
+  /// 字段名照 Anthropic 消息格式；DeepSeek 文档写的是“这个块类型支持”，
+  /// 具体字段就按 Anthropic 官方的来。
+  static LlmReply _parseAnthropic(String body) {
+    try {
+      final Object? j = jsonDecode(body);
+      if (j is! Map) return const LlmReply(error: '返回的不是 JSON 对象');
+      final Object? content = j['content'];
+      if (content is! List) return const LlmReply(error: '返回里没有 content');
+
+      final StringBuffer text = StringBuffer();
+      final StringBuffer think = StringBuffer();
+      final List<LlmSource> sources = <LlmSource>[];
+      int searches = 0;
+
+      for (final Object? b in content) {
+        if (b is! Map) continue;
+        switch ('${b['type']}') {
+          case 'text':
+            text.write('${b['text'] ?? ''}');
+          case 'thinking':
+            think.write('${b['thinking'] ?? ''}');
+          case 'server_tool_use':
+            searches++;
+          case 'web_search_tool_result':
+            final Object? inner = b['content'];
+            if (inner is List) {
+              for (final Object? r in inner) {
+                if (r is! Map) continue;
+                sources.add(
+                  LlmSource(
+                    title: '${r['title'] ?? ''}',
+                    url: '${r['url'] ?? ''}',
+                  ),
+                );
+              }
+            }
+        }
+      }
+
+      return LlmReply(
+        text: text.toString(),
+        reasoning: think.isEmpty ? null : think.toString(),
+        usage: _anthropicUsage(j['usage']),
+        sources: sources,
+        searches: searches,
+      );
+    } catch (e) {
+      return LlmReply(error: '解析失败：$e');
+    }
+  }
+
+  static LlmUsage? _anthropicUsage(Object? u) {
+    if (u is! Map) return null;
+    int n(Object? v) => v is num ? v.toInt() : 0;
+    return LlmUsage(
+      input: n(u['input_tokens']),
+      output: n(u['output_tokens']),
+      // Anthropic 把缓存读写分开报；命中 ≈ cache_read。
+      cacheHit: n(u['cache_read_input_tokens']),
+      cacheMiss: n(u['cache_creation_input_tokens']),
+    );
   }
 
   static LlmUsage? _usageOf(Object? u) {
@@ -279,8 +482,11 @@ class LlmClient {
     String apiKey,
     LlmRequest req,
   ) async* {
-    if (provider.protocol != Protocol.deepseek) {
-      yield LlmChunk(error: '这个协议还没接：${provider.protocol.label}');
+    // 流式只做了 OpenAI 形状（DeepSeek 的 chat/completions）。
+    // Anthropic 形状的流式事件形状不一样（message_start / content_block_delta…），
+    // **没做就直说**，不拿 OpenAI 的解析器去套。
+    if (provider.protocol.wire != Wire.openai) {
+      yield LlmChunk(error: '${provider.protocol.label} 的流式还没接（先支持非流式）');
       return;
     }
     if (apiKey.trim().isEmpty) {
@@ -288,9 +494,8 @@ class LlmClient {
       return;
     }
 
-    final Uri uri = Uri.parse(
-      '${provider.protocol.baseUrl}${provider.protocol.apiPath}',
-    );
+    // 跟 `send()` 一样：用服务商自己的地址，不是协议默认的。
+    final Uri uri = Uri.parse(provider.endpoint);
     final String payload = jsonEncode(<String, Object?>{
       ...req.toJson(),
       'stream': true,

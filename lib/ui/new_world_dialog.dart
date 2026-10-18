@@ -498,16 +498,16 @@ class _Input extends StatelessWidget {
         border: JoShape.border(p.border),
         borderRadius: JoShape.br,
       ),
-      child: TextField(
-        controller: controller,
-        maxLines: lines,
-        minLines: lines,
-        style: s.bodyStyle(p.text).copyWith(fontSize: 14),
-        cursorColor: p.accent,
-        decoration: InputDecoration(
-          isDense: true,
-          border: InputBorder.none,
-          hintText: hint,
+      // 原来的 `TextField` 靠 `minLines: lines` 撑高度；`JoTextField` 没这个
+      // 参数，所以按行高（14 号字 × 1.75）给个最小高度。
+      child: ConstrainedBox(
+        constraints: BoxConstraints(minHeight: lines * 14 * 1.75),
+        child: JoTextField(
+          controller: controller,
+          maxLines: lines,
+          verticalPadding: 0,
+          style: s.bodyStyle(p.text).copyWith(fontSize: 14),
+          hint: hint,
           hintStyle: s.bodyStyle(p.secondary).copyWith(fontSize: 14),
         ),
       ),

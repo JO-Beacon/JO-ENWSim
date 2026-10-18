@@ -20,10 +20,36 @@ Future<Provider?> showAddProviderDialog(
   );
 }
 
-class _AddProviderDialog extends StatelessWidget {
+class _AddProviderDialog extends StatefulWidget {
   const _AddProviderDialog({required this.presets});
 
   final List<ProviderPreset> presets;
+
+  @override
+  State<_AddProviderDialog> createState() => _AddProviderDialogState();
+}
+
+class _AddProviderDialogState extends State<_AddProviderDialog> {
+  /// 过滤词。按厂商名和地址找 —— 有时候记得的是域名而不是名字。
+  final TextEditingController _q = TextEditingController();
+
+  @override
+  void dispose() {
+    _q.dispose();
+    super.dispose();
+  }
+
+  /// 过滤后的预设。空查询 = 全部。
+  List<ProviderPreset> get _filtered {
+    final String q = _q.text.trim().toLowerCase();
+    if (q.isEmpty) return widget.presets;
+    return <ProviderPreset>[
+      for (final ProviderPreset ps in widget.presets)
+        if (ps.name.toLowerCase().contains(q) ||
+            ps.baseUrl.toLowerCase().contains(q))
+          ps,
+    ];
+  }
 
   void _pop(
     BuildContext context, {
@@ -70,6 +96,7 @@ class _AddProviderDialog extends StatelessWidget {
         child: Column(
           children: <Widget>[
             _header(context, p),
+            _search(p),
             Expanded(child: _list(context, p)),
             _footer(p),
           ],
@@ -116,11 +143,47 @@ class _AddProviderDialog extends StatelessWidget {
     );
   }
 
+  Widget _search(JoPalette p) {
+    return Container(
+      padding: const EdgeInsets.fromLTRB(
+        JoSpace.s4,
+        JoSpace.s3,
+        JoSpace.s4,
+        JoSpace.s1,
+      ),
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: JoSpace.s3),
+        decoration: BoxDecoration(
+          color: p.surface,
+          border: JoShape.border(p.border),
+          borderRadius: JoShape.br,
+        ),
+        child: JoTextField(
+          controller: _q,
+          onChanged: (_) => setState(() {}),
+          style: JoFonts.ui.copyWith(fontSize: 13, color: p.text),
+          hint: '找厂商（名字或地址）',
+          hintStyle: JoFonts.ui.copyWith(fontSize: 13, color: p.secondary),
+        ),
+      ),
+    );
+  }
+
   Widget _list(BuildContext context, JoPalette p) {
+    final List<ProviderPreset> presets = _filtered;
+    final bool searching = _q.text.trim().isNotEmpty;
     return ListView(
       padding: const EdgeInsets.all(JoSpace.s4),
       children: <Widget>[
         _section(p, '厂商预设'),
+        if (presets.isEmpty)
+          Padding(
+            padding: const EdgeInsets.only(bottom: JoSpace.s2),
+            child: Text(
+              '没找到匹配的厂商。换个词，或者用下面的“自定义”。',
+              style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+            ),
+          ),
         for (final ProviderPreset ps in presets)
           _card(
             context,
@@ -138,7 +201,8 @@ class _AddProviderDialog extends StatelessWidget {
             ),
           ),
         const SizedBox(height: JoSpace.s5),
-        _section(p, '自定义'),
+        // 自己填地址走这条，跟厂商无关，所以搜索时也留着。
+        _section(p, searching ? '自定义（不受搜索影响）' : '自定义'),
         for (final CustomShape c in CustomShape.values)
           _card(
             context,

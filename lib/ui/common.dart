@@ -1,3 +1,4 @@
+import 'package:flutter/cupertino.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -361,7 +362,7 @@ class JoPageHeader extends StatelessWidget {
 /// 文本输入框（自带状态；父级换 key 就能重设初值）。
 /// 快捷键输入框：点一下进入捕获，然后**按你要的组合键**。
 ///
-/// 不做「手打 Ctrl+E」这种反人类的事。
+/// 不做“手打 Ctrl+E”这种反人类的事。
 /// Esc 取消本次捕获（不是记下 Esc）。
 class JoKeyField extends StatefulWidget {
   const JoKeyField({super.key, required this.spec, required this.onChanged});
@@ -543,15 +544,19 @@ class _JoInputState extends State<JoInput> {
   }
 }
 
-/// 单行输入框：`EditableText` + 提示文字，**不挂 Material**。
+/// 输入框：`EditableText` + 提示文字，**不挂 Material**。
 ///
 /// 为什么不用自带那个 `TextField`：它要求外面有 `Material` 祖先。而这套界面
 /// 是自绘的、树里没有 `Material`，于是 debug 构建直接抛红屏（release 里那句
 /// 检查被编译掉，看着没事，但 ink / 焦点高亮 / 默认文字样式全取不到）。
 /// 所以输入框一律走这里，边框、底色、左右内边距由外面那个 Container 给。
 ///
+/// **光有 `EditableText` 是不能选字的**：拖选、双击选词、三击选行、Shift+点
+/// 扩选、右键菜单，都是 `TextField` 自己额外垫的那层手势。这里用
+/// [TextSelectionGestureDetectorBuilder] 把那层补回来（它已经是公开 API）。
+///
 /// 高度对齐原来的 `TextField(isDense: true, border: InputBorder.none)`：
-/// 它比纯文字高 8，所以这里上下各留 4。
+/// 它比纯文字高 8，所以这里上下各留 4（可用 [verticalPadding] 改）。
 class JoTextField extends StatefulWidget {
   const JoTextField({
     super.key,
@@ -564,6 +569,9 @@ class JoTextField extends StatefulWidget {
     this.onChanged,
     this.onSubmitted,
     this.maxLines = 1,
+    this.minLines,
+    this.focusNode,
+    this.verticalPadding = 4,
   });
 
   final TextEditingController controller;
@@ -578,59 +586,169 @@ class JoTextField extends StatefulWidget {
   /// `null` = 不限行数（多行）。[obscureText] 为真时必须是 1。
   final int? maxLines;
 
+  /// 最少占几行的高度（为空就跟内容走）。多行框用它撑住初始高度。
+  final int? minLines;
+
+  /// 外面要自己管焦点（比如失焦时提交）就传一个进来，不传就内部建一个。
+  final FocusNode? focusNode;
+
+  final double verticalPadding;
+
   @override
   State<JoTextField> createState() => _JoTextFieldState();
 }
 
 class _JoTextFieldState extends State<JoTextField> {
-  final FocusNode _focus = FocusNode();
+  FocusNode? _ownFocus;
+
+  FocusNode get _focus => widget.focusNode ?? (_ownFocus ??= FocusNode());
 
   @override
   void dispose() {
-    _focus.dispose();
+    _ownFocus?.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
     final JoPalette p = JoTheme.of(context);
-    return Padding(
-      padding: const EdgeInsets.symmetric(vertical: 4),
-      child: ValueListenableBuilder<TextEditingValue>(
-        valueListenable: widget.controller,
-        builder: (BuildContext c, TextEditingValue v, Widget? _) {
-          return Stack(
-            alignment: AlignmentDirectional.centerStart,
-            children: <Widget>[
-              // 提示文字不能挡住点击，否则点上去插不进光标。
-              if (v.text.isEmpty && widget.hint != null)
-                IgnorePointer(
-                  child: Text(
-                    widget.hint!,
-                    maxLines: 1,
-                    overflow: TextOverflow.ellipsis,
-                    style:
-                        widget.hintStyle ??
-                        widget.style.copyWith(color: p.secondary),
-                  ),
-                ),
-              EditableText(
-                controller: widget.controller,
-                focusNode: _focus,
-                autofocus: widget.autofocus,
-                maxLines: widget.maxLines,
-                obscureText: widget.obscureText,
-                style: widget.style,
-                cursorColor: p.accent,
-                cursorWidth: 1.5,
-                backgroundCursorColor: p.border,
-                selectionColor: p.accent.withValues(alpha: 0.3),
-                onChanged: widget.onChanged,
-                onSubmitted: widget.onSubmitted,
-              ),
-            ],
-          );
-        },
+    // 选中底色用界面自己的强调色：Cupertino 那套从
+    // `DefaultSelectionStyle` 读它，Cupertino 默认是系统蓝，跟深色界面不搭。
+    return DefaultSelectionStyle(
+      selectionColor: p.accent.withValues(alpha: 0.3),
+      cursorColor: p.accent,
+      child: CupertinoTextField(
+        controller: widget.controller,
+        focusNode: _focus,
+        autofocus: widget.autofocus,
+        maxLines: widget.maxLines,
+        minLines: widget.minLines,
+        obscureText: widget.obscureText,
+        style: widget.style,
+        placeholder: widget.hint,
+        placeholderStyle:
+            widget.hintStyle ?? widget.style.copyWith(color: p.secondary),
+        cursorColor: p.accent,
+        // 底色、描边、圆角都由外面那个 Container 给，这里什么都不画。
+        decoration: const BoxDecoration(),
+        // 内边距放在框里面，这样整块框都能点（不只是文字那一行）。
+        padding: EdgeInsets.symmetric(vertical: widget.verticalPadding),
+        onChanged: widget.onChanged,
+        onSubmitted: widget.onSubmitted,
+        // 菜单外观自己给：Cupertino 自带的那个是圆角大灰底，跟这套界面不搭。
+        // **布局**仍然交给 Flutter（`TextSelectionToolbar` 负责把菜单摆到选区上方，
+        // 屏幕放不下就翻到下方），只有那层壳换成我们的样式。
+        contextMenuBuilder: (BuildContext c, EditableTextState st) =>
+            _toolbar(st, p),
+      ),
+    );
+  }
+
+  /// 选中文字后弹的菜单：方角、跟卡片同一种底色和描边，字用界面字体。
+  ///
+  /// 动作直接调 `EditableTextState` 那几个方法：它们做完会自己把菜单收掉。
+  Widget _toolbar(EditableTextState st, JoPalette p) {
+    final TextEditingValue v = widget.controller.value;
+    final TextSelection sel = v.selection;
+    final bool hasSel = sel.isValid && !sel.isCollapsed;
+    final bool hasText = v.text.isNotEmpty;
+    final bool allSel = hasText && sel.start == 0 && sel.end == v.text.length;
+    final TextSelectionToolbarAnchors a = st.contextMenuAnchors;
+
+    final List<({String label, VoidCallback? onTap})> items =
+        <({String label, VoidCallback? onTap})>[
+          if (!widget.obscureText)
+            (
+              label: '剪切',
+              onTap: hasSel
+                  ? () => st.cutSelection(SelectionChangedCause.toolbar)
+                  : null,
+            ),
+          if (!widget.obscureText)
+            (
+              label: '复制',
+              onTap: hasSel
+                  ? () => st.copySelection(SelectionChangedCause.toolbar)
+                  : null,
+            ),
+          (
+            label: '粘贴',
+            onTap: () => st.pasteText(SelectionChangedCause.toolbar),
+          ),
+          (
+            label: '全选',
+            onTap: hasText && !allSel
+                ? () => st.selectAll(SelectionChangedCause.toolbar)
+                : null,
+          ),
+        ];
+
+    return TextSelectionToolbar(
+      anchorAbove: a.primaryAnchor,
+      anchorBelow: a.secondaryAnchor ?? a.primaryAnchor,
+      toolbarBuilder: (BuildContext ctx, Widget child) => Container(
+        decoration: BoxDecoration(
+          color: p.surface,
+          border: JoShape.border(p.border),
+          // 方角：跟卡片一样只留 2 的小圆角，不用 Cupertino 那种大圆角。
+          borderRadius: JoShape.br,
+        ),
+        child: child,
+      ),
+      children: <Widget>[
+        for (final ({String label, VoidCallback? onTap}) it in items)
+          _JoToolbarButton(palette: p, label: it.label, onTap: it.onTap),
+      ],
+    );
+  }
+}
+
+/// 选中菜单上的一个文字按钮（自绘外观，不是 Material 的 `TextButton`）。
+class _JoToolbarButton extends StatefulWidget {
+  const _JoToolbarButton({
+    required this.palette,
+    required this.label,
+    required this.onTap,
+  });
+
+  final JoPalette palette;
+  final String label;
+
+  /// `null` = 这一项现在用不了（灰着，点了没反应）。
+  final VoidCallback? onTap;
+
+  @override
+  State<_JoToolbarButton> createState() => _JoToolbarButtonState();
+}
+
+class _JoToolbarButtonState extends State<_JoToolbarButton> {
+  bool _hover = false;
+
+  @override
+  Widget build(BuildContext context) {
+    final JoPalette p = widget.palette;
+    final bool on = widget.onTap != null;
+    return MouseRegion(
+      cursor: on ? SystemMouseCursors.click : SystemMouseCursors.basic,
+      onEnter: (_) => setState(() => _hover = true),
+      onExit: (_) => setState(() => _hover = false),
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: widget.onTap,
+        child: Container(
+          padding: const EdgeInsets.symmetric(
+            horizontal: JoSpace.s3,
+            vertical: 6,
+          ),
+          color: on && _hover ? p.border.withValues(alpha: 0.5) : null,
+          child: Text(
+            widget.label,
+            style: JoFonts.ui.copyWith(
+              fontSize: 12,
+              color: on ? p.text : p.secondary,
+            ),
+          ),
+        ),
       ),
     );
   }

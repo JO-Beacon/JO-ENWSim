@@ -18,6 +18,7 @@ import 'common.dart';
 import 'icons.dart';
 import 'char_choices_dialog.dart';
 import 'model_plan_dialog.dart';
+import 'turn_flow.dart';
 import 'world_settings.dart';
 import 'new_world_dialog.dart';
 import 'settings_page.dart';
@@ -103,7 +104,7 @@ class _WorkspaceState extends State<Workspace>
   final Map<String, Map<String, MemoryBook>> _memory =
       <String, Map<String, MemoryBook>>{};
 
-  /// 底部那个「编辑」按钮**常驻**；编辑与记忆都是弹窗，不占右栏。
+  /// 底部那个“编辑”按钮**常驻**；编辑与记忆都是弹窗，不占右栏。
 
   /// 推进方式的循环顺序。点一下切下一个。
   static const List<String> kRunModes = <String>['冻结', '单步', '智能', '全自动'];
@@ -115,10 +116,14 @@ class _WorkspaceState extends State<Workspace>
   /// 现在只记着这个选择，真正的推进要引擎。
   String _mode = '冻结';
 
-  /// 引擎在跑吗。「单步」跑一圈的期间为 true。
+  /// 引擎在跑吗。“单步”跑一圈的期间为 true。
   bool _engineBusy = false;
 
-  /// 角色的「选择」（采样策略 / 最大输出 / 流式 / 推理档位 / JSON）。
+  /// 右栏那张流程图的进度：正在跑哪一步、哪些跑过了。
+  String? _flowActive;
+  final Set<String> _flowDone = <String>{};
+
+  /// 角色的“选择”（采样策略 / 最大输出 / 流式 / 推理档位 / JSON）。
   /// 按世界分，世界里再按角色名分——**每个角色各有一套**。
   final Map<String, Map<String, CharChoices>> _choices =
       <String, Map<String, CharChoices>>{};
@@ -283,8 +288,8 @@ class _WorkspaceState extends State<Workspace>
     });
   }
 
-  /// 卡片上的「编辑」：跟右栏底部那个是**同一个入口** —— 打开编辑弹窗。
-  /// 之前它开的是「创建向导」那个合体弹窗，那才是要修的。
+  /// 卡片上的“编辑”：跟右栏底部那个是**同一个入口** —— 打开编辑弹窗。
+  /// 之前它开的是“创建向导”那个合体弹窗，那才是要修的。
   Future<void> _editWorld(World w) async {
     if (w.id != _worldId) setState(() => _worldId = w.id);
     await _openEdit();
@@ -563,7 +568,7 @@ class _WorkspaceState extends State<Workspace>
         : _mainPage();
     // 页面切换：160ms 淡入淡出（克制，不做位移 / 缩放）
     // layoutBuilder 给紧约束：里面有 Row + Expanded，默认那个松散 Stack 撑不起来。
-    // 快捷键。全局这几条**从设置里读**，不再写死；「发送」不在这里，
+    // 快捷键。全局这几条**从设置里读**，不再写死；“发送”不在这里，
     // 它落在输入框上（输入框自己吃 Enter）。
     // 认不出来的键位不会绑上去 —— 设置那页会当场标出来。
     return CallbackShortcuts(
@@ -585,7 +590,7 @@ class _WorkspaceState extends State<Workspace>
   }
 
   /// 全局那几条绑定。键位**从设置里读**，不再写死。
-  /// 「发送」不在其中 —— 它落在输入框上。
+  /// “发送”不在其中 —— 它落在输入框上。
   /// 认不出来的键位不绑（设置那页会标出来）。
   Map<ShortcutActivator, VoidCallback> _bindings() {
     final Map<ShortcutActivator, VoidCallback> out =
@@ -603,7 +608,7 @@ class _WorkspaceState extends State<Workspace>
     return out;
   }
 
-  /// 「单步」：让引擎跑**一次完整流程**（A₀ → AD → A₁ 或角色回合 → A₄）。
+  /// “单步”：让引擎跑**一次完整流程**（A₀ → AD → A₁ 或角色回合 → A₄）。
   ///
   /// 跑完重新从库里读世界——回合已经写进 step 表了，界面跟着刷新就行。
   Future<void> _runStepOnce() async {
@@ -626,6 +631,11 @@ class _WorkspaceState extends State<Workspace>
     }
 
     setState(() => _engineBusy = true);
+    // 一次新的推演：进度清空，从第一步开始点灯。
+    setState(() {
+      _flowDone.clear();
+      _flowActive = null;
+    });
     try {
       final Engine e = Engine(
         EngineInput(
@@ -639,6 +649,15 @@ class _WorkspaceState extends State<Workspace>
           worldPlan: _plans[_world.id] ?? const ModelPlan(),
           charPlans: _charModel[_world.id] ?? const <String, ModelPlan>{},
           charChoices: _choices[_world.id] ?? const <String, CharChoices>{},
+          // 每进一个步骤就把流程图上的灯挪过去。
+          onStep: (String id) {
+            if (!mounted) return;
+            setState(() {
+              final String? prev = _flowActive;
+              if (prev != null) _flowDone.add(prev);
+              _flowActive = id;
+            });
+          },
           memories: (_memory[_world.id] ?? const <String, MemoryBook>{}).values
               .toList(),
         ),
@@ -808,7 +827,7 @@ class _WorkspaceState extends State<Workspace>
                   mode: _engineBusy ? '跑着……' : _mode,
                   onMode: (String v) {
                     setState(() => _mode = v);
-                    // 「单步」不是选个模式就完了：它是让引擎**跑一次**。
+                    // “单步”不是选个模式就完了：它是让引擎**跑一次**。
                     if (v == '单步') _runStepOnce();
                   },
                   modeKey: _modeKey,
@@ -834,7 +853,9 @@ class _WorkspaceState extends State<Workspace>
                     settings: widget.settings,
                     controller: _input,
                     onSubmit: _submit,
-                    sendKey: widget.keys[JoKey.send] ?? 'Enter',
+                    sendKey: widget.keys[JoKey.send] ?? joFallback(JoKey.send),
+                    newlineKey:
+                        widget.keys[JoKey.newline] ?? joFallback(JoKey.newline),
                   ),
                 ] else
                   Container(
@@ -872,6 +893,8 @@ class _WorkspaceState extends State<Workspace>
                     focusedLane: _focusedLane,
                     selectedEvent: _selectedEvent,
                     selectedIndex: _selected,
+                    flowActive: _flowActive,
+                    flowDone: _flowDone,
                     onClear: () => setState(() {
                       _focused = null;
                       _selected = null;
@@ -1140,14 +1163,12 @@ class _BodyEditorState extends State<_BodyEditor> {
     return Container(
       padding: const EdgeInsets.all(JoSpace.s2),
       decoration: BoxDecoration(border: Border.all(color: p.border)),
-      child: EditableText(
+      child: JoTextField(
         controller: _c,
         focusNode: _f,
         maxLines: null,
         style: widget.style,
-        cursorColor: p.accent,
-        backgroundCursorColor: p.border,
-        selectionColor: p.accent.withValues(alpha: 0.3),
+        verticalPadding: 0,
       ),
     );
   }
@@ -1507,6 +1528,8 @@ class _SidePanel extends StatelessWidget {
     required this.selectedIndex,
     required this.onClear,
     required this.onEditText,
+    this.flowActive,
+    this.flowDone = const <String>{},
   });
 
   final JoPalette palette;
@@ -1520,6 +1543,10 @@ class _SidePanel extends StatelessWidget {
   /// 右栏改了正文之后交回给上层（存库 + 刷新）。
   /// 参数：序列 id、画布上的步序、新正文。
   final void Function(String laneId, int index, String text) onEditText;
+
+  /// 流程图：正在跑的步骤、跑过的步骤。
+  final String? flowActive;
+  final Set<String> flowDone;
 
   @override
   Widget build(BuildContext context) {
@@ -1567,6 +1594,8 @@ class _SidePanel extends StatelessWidget {
               ],
             ),
           ),
+          // 回合流程图：**常驻**在右栏顶部，推演时亮当前步。
+          TurnFlow(palette: p, active: flowActive, done: flowDone),
           Expanded(
             child: ListView(
               padding: const EdgeInsets.fromLTRB(
@@ -1945,7 +1974,7 @@ class _ComposeBar extends StatelessWidget {
   final String? model;
   final VoidCallback onPickModel;
 
-  /// 打开「选择」面板（跟着角色走的那一套）。
+  /// 打开“选择”面板（跟着角色走的那一套）。
   final VoidCallback onChoices;
 
   @override
@@ -2004,6 +2033,7 @@ class _InputBar extends StatelessWidget {
     required this.controller,
     required this.onSubmit,
     required this.sendKey,
+    required this.newlineKey,
   });
 
   final JoPalette palette;
@@ -2011,8 +2041,11 @@ class _InputBar extends StatelessWidget {
   final TextEditingController controller;
   final VoidCallback onSubmit;
 
-  /// 「发送」用哪个键（从设置里读）。
+  /// “发送”用哪个键（从设置里读）。
   final String sendKey;
+
+  /// “换行”用哪个键（从设置里读）。发言框是多行的，两个动作各占一个键。
+  final String newlineKey;
 
   @override
   Widget build(BuildContext context) {
@@ -2032,6 +2065,7 @@ class _InputBar extends StatelessWidget {
               settings: settings,
               onSubmit: onSubmit,
               sendKey: sendKey,
+              newlineKey: newlineKey,
             ),
           ),
           const SizedBox(width: JoSpace.s2),
@@ -2054,12 +2088,16 @@ class _JoInput extends StatefulWidget {
     required this.settings,
     required this.onSubmit,
     required this.sendKey,
+    required this.newlineKey,
   });
 
   final TextEditingController controller;
   final JoSettings settings;
   final VoidCallback onSubmit;
   final String sendKey;
+
+  /// “换行”键。发言框是多行的，两个动作各占一个键，都能在设置里改。
+  final String newlineKey;
 
   @override
   State<_JoInput> createState() => _JoInputState();
@@ -2074,50 +2112,64 @@ class _JoInputState extends State<_JoInput> {
     super.dispose();
   }
 
+  /// 在光标处插一个换行（选中的话先替换掉）。
+  ///
+  /// 两个细节：
+  ///   1. 光设 `controller.value` 就够了，但**输入法那边的输出状态还是旧的**，
+  ///      光标会留在原处不动。所以下一帧再把选区显式设一次，并保住焦点。
+  ///   2. 换行键如果是**裸 Enter**，根本不该走到这里 —— 那就交给输入框自己
+  ///      处理（它会把光标、滚动、输入法状态全带对），见 `build`。
+  void _insertNewline() {
+    final TextEditingValue v = widget.controller.value;
+    final TextSelection s = v.selection;
+    final int at = s.isValid ? s.start : v.text.length;
+    final int end = s.isValid ? s.end : v.text.length;
+    final int caret = at + 1;
+    widget.controller.value = TextEditingValue(
+      text: v.text.replaceRange(at, end, '\n'),
+      selection: TextSelection.collapsed(offset: caret),
+    );
+    _focus.requestFocus();
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (!mounted) return;
+      // 输入法可能会把选区推回去；下一帧再钉一次。
+      if (widget.controller.selection.baseOffset != caret) {
+        widget.controller.selection = TextSelection.collapsed(offset: caret);
+      }
+    });
+  }
+
   @override
   Widget build(BuildContext context) {
     final JoSettings s = JoTheme.settingsOf(context);
     // 不用 s.palette —— 那个 getter 已被删除（它算不出跟随系统）。
     final JoPalette p = JoTheme.of(context);
-    return ValueListenableBuilder<TextEditingValue>(
-      valueListenable: widget.controller,
-      builder: (BuildContext context, TextEditingValue value, _) {
-        // 「发送」键**从设置里读**。
-        //
-        // Enter 走 EditableText 自己的 onSubmitted —— 输入框里的按键
-        // 先被输入法吃掉，外面的全局绑定根本看不见它。所以别的组合键
-        // 在这儿绑；发送键正好是 Enter 时**不重复绑**，免得送两次。
-        final ShortcutActivator? a = joActivator(widget.sendKey);
-        final bool bareEnter = widget.sendKey.trim().toLowerCase() == 'enter';
-        return CallbackShortcuts(
-          bindings: <ShortcutActivator, VoidCallback>{
-            if (a != null && !bareEnter) a: widget.onSubmit,
-          },
-          child: Stack(
-            alignment: Alignment.centerLeft,
-            children: <Widget>[
-              if (value.text.isEmpty)
-                Text(
-                  '你要做什么……',
-                  style: s.bodyStyle(p.secondary).copyWith(fontSize: 15),
-                ),
-              EditableText(
-                controller: widget.controller,
-                focusNode: _focus,
-                autofocus: true,
-                maxLines: 1,
-                textInputAction: TextInputAction.send,
-                onSubmitted: (_) => widget.onSubmit(),
-                style: s.bodyStyle(p.text).copyWith(fontSize: 15),
-                cursorColor: p.accent,
-                cursorWidth: 1.5,
-                backgroundCursorColor: p.border,
-                selectionColor: p.accent.withValues(alpha: 0.3),
-              ),
-            ],
-          ),
-        );
+    // “发送”和“换行”都**从设置里读**（设置 → 快捷键）。
+    //
+    // 框是**多行**的：长句自动折行、框跟着长高（1~6 行，再多自己滚）。
+    // 多行框会把回车当换行吃下去，所以两个键都走快捷键表、不靠输入框默认：
+    // 填 `Enter` 就是回车发送；要换行就给“换行”绑另一个键。
+    final ShortcutActivator? a = joActivator(widget.sendKey);
+    final ShortcutActivator? nl = joActivator(widget.newlineKey);
+    // 裸 Enter 不绑：让它落到输入框自己手里。多行框自己插换行时，
+    // 光标、滚动、输入法状态都是对的；我们自己插入做不到这么齐。
+    final bool bareEnterNl = widget.newlineKey.trim().toLowerCase() == 'enter';
+    return CallbackShortcuts(
+      bindings: <ShortcutActivator, VoidCallback>{
+        if (a != null) a: widget.onSubmit,
+        if (nl != null && !bareEnterNl) nl: _insertNewline,
       },
+      child: JoTextField(
+        controller: widget.controller,
+        focusNode: _focus,
+        autofocus: true,
+        minLines: 1,
+        maxLines: 6,
+        style: s.bodyStyle(p.text).copyWith(fontSize: 15),
+        hint: '你要做什么……',
+        hintStyle: s.bodyStyle(p.secondary).copyWith(fontSize: 15),
+        verticalPadding: 2,
+      ),
     );
   }
 }
