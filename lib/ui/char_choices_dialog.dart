@@ -141,7 +141,11 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
               style: JoFonts.meta.copyWith(color: p.secondary),
             ),
           ),
-          JoButton(text: '×', onTap: () => Navigator.of(context).pop()),
+          JoButton(
+            text: '×',
+            tip: '关闭',
+            onTap: () => Navigator.of(context).pop(),
+          ),
         ],
       ),
     );

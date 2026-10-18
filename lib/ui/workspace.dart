@@ -25,6 +25,7 @@ import 'lane_focus.dart';
 import 'char_choices_dialog.dart';
 import 'model_plan_dialog.dart';
 import 'splitter.dart';
+import 'tooltip.dart';
 import 'turn_flow.dart';
 import 'world_settings.dart';
 import 'new_world_dialog.dart';
@@ -1654,13 +1655,16 @@ class _WorldTile extends StatelessWidget {
               border: JoShape.border(on || hover ? p.accent : p.border),
               borderRadius: JoShape.br,
             ),
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.start,
+            child: Row(
+              // 名字 + 副标题在左，铅笔在右、上下居中；
+              // 铅笔跟右栏底部那个是同一个图标，点开也是同一张弹窗。
+              crossAxisAlignment: CrossAxisAlignment.center,
               children: <Widget>[
-                Row(
-                  children: <Widget>[
-                    Expanded(
-                      child: Text(
+                Expanded(
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(
                         world.name,
                         overflow: TextOverflow.ellipsis,
                         style: JoFonts.ui.copyWith(
@@ -1669,31 +1673,24 @@ class _WorldTile extends StatelessWidget {
                           fontWeight: on ? FontWeight.w700 : FontWeight.w400,
                         ),
                       ),
-                    ),
-                    const SizedBox(width: JoSpace.s2),
-                    GestureDetector(
-                      onTap: onEdit,
-                      child: MouseRegion(
-                        cursor: SystemMouseCursors.click,
-                        child: Text(
-                          '编辑',
-                          style: JoFonts.meta.copyWith(
-                            color: on ? p.accent : p.secondary,
-                            fontSize: 10,
-                          ),
+                      const SizedBox(height: 2),
+                      Text(
+                        world.note,
+                        overflow: TextOverflow.ellipsis,
+                        style: JoFonts.meta.copyWith(
+                          color: p.secondary,
+                          fontSize: 10,
                         ),
                       ),
-                    ),
-                  ],
-                ),
-                const SizedBox(height: 2),
-                Text(
-                  world.note,
-                  overflow: TextOverflow.ellipsis,
-                  style: JoFonts.meta.copyWith(
-                    color: p.secondary,
-                    fontSize: 10,
+                    ],
                   ),
+                ),
+                const SizedBox(width: JoSpace.s2),
+                JoIconAction(
+                  icon: JoIcons.pencil,
+                  tip: '编辑这个世界',
+                  size: 18,
+                  onTap: onEdit,
                 ),
               ],
             ),
@@ -1778,13 +1775,16 @@ class _SidePanel extends StatelessWidget {
                 if (e != null || lane != null)
                   Padding(
                     padding: const EdgeInsets.only(left: JoSpace.s3),
-                    child: GestureDetector(
-                      onTap: onClear,
-                      child: MouseRegion(
-                        cursor: SystemMouseCursors.click,
-                        child: Text(
-                          '×',
-                          style: JoFonts.meta.copyWith(color: p.secondary),
+                    child: JoTooltip(
+                      text: e != null ? '取消选中这一步' : '取消选中这个地点',
+                      child: GestureDetector(
+                        onTap: onClear,
+                        child: MouseRegion(
+                          cursor: SystemMouseCursors.click,
+                          child: Text(
+                            '×',
+                            style: JoFonts.meta.copyWith(color: p.secondary),
+                          ),
                         ),
                       ),
                     ),

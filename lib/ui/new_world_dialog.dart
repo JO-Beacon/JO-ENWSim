@@ -3,6 +3,7 @@ import 'package:flutter/material.dart';
 import '../model/demo.dart';
 import '../theme/tokens.dart';
 import 'common.dart';
+import 'tooltip.dart';
 
 /// 新建世界：两步向导。
 ///
@@ -204,13 +205,16 @@ class _WorldDialogState extends State<_WorldDialog> {
           const SizedBox(width: JoSpace.s2),
           _stepChip(p, 3, '③ 扮演谁'),
           const Spacer(),
-          GestureDetector(
-            onTap: () => Navigator.of(context).pop(),
-            child: MouseRegion(
-              cursor: SystemMouseCursors.click,
-              child: Text(
-                '×',
-                style: JoFonts.meta.copyWith(color: p.secondary),
+          JoTooltip(
+            text: '关闭',
+            child: GestureDetector(
+              onTap: () => Navigator.of(context).pop(),
+              child: MouseRegion(
+                cursor: SystemMouseCursors.click,
+                child: Text(
+                  '×',
+                  style: JoFonts.meta.copyWith(color: p.secondary),
+                ),
               ),
             ),
           ),
@@ -391,13 +395,16 @@ class _WorldDialogState extends State<_WorldDialog> {
                 child: _Input(controller: d.nameC, hint: '角色名'),
               ),
               const SizedBox(width: JoSpace.s2),
-              GestureDetector(
-                onTap: () => _removeChar(i),
-                child: MouseRegion(
-                  cursor: SystemMouseCursors.click,
-                  child: Text(
-                    '×',
-                    style: JoFonts.meta.copyWith(color: p.secondary),
+              JoTooltip(
+                text: '移除这个角色',
+                child: GestureDetector(
+                  onTap: () => _removeChar(i),
+                  child: MouseRegion(
+                    cursor: SystemMouseCursors.click,
+                    child: Text(
+                      '×',
+                      style: JoFonts.meta.copyWith(color: p.secondary),
+                    ),
                   ),
                 ),
               ),

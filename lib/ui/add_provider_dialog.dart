@@ -123,7 +123,11 @@ class _AddProviderDialogState extends State<_AddProviderDialog> {
             ),
           ),
           const Spacer(),
-          JoButton(text: '×', onTap: () => Navigator.of(context).pop()),
+          JoButton(
+            text: '×',
+            tip: '关闭',
+            onTap: () => Navigator.of(context).pop(),
+          ),
         ],
       ),
     );

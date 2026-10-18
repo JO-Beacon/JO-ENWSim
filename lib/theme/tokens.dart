@@ -72,10 +72,20 @@ class JoPalette {
 }
 
 /// 字体族。
+///
+/// 只有两个：思源黑体（Noto Sans SC）与思源宋体（Noto Serif SC）。
+/// **不许再写 'monospace' 这种泛称**：它不是字体名，Windows 上找不到这个
+/// 字体族，引擎就落回自带的 Roboto（就是那股“Material 味”），
+/// 而中文又落回系统字体，于是同一行里两种字。
 class JoFonts {
   static const String sans = 'NotoSansSC';
   static const String serif = 'NotoSerifSC';
-  static const String mono = 'monospace';
+
+  /// 数字等宽。以前靠等宽字体把编号那列对齐；换成思源后用这个特性，
+  /// 数字宽度一致、列不会跳。字体不支持就忽略。
+  static const List<FontFeature> tabular = <FontFeature>[
+    FontFeature.tabularFigures(),
+  ];
 
   /// 界面 / 标题（黑体）
   static const TextStyle ui = TextStyle(fontFamily: sans);
@@ -87,9 +97,10 @@ class JoFonts {
     fontSize: 16,
   );
 
-  /// 元数据 / 标签（等宽）
+  /// 元数据 / 标签（小一号的黑体 + 数字等宽）
   static const TextStyle meta = TextStyle(
-    fontFamily: mono,
+    fontFamily: sans,
+    fontFeatures: tabular,
     height: 1.4,
     fontSize: 12,
     letterSpacing: 0.4,

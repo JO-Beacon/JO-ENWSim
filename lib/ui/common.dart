@@ -4,6 +4,7 @@ import 'package:flutter/services.dart';
 
 import '../theme/tokens.dart';
 import 'icons.dart';
+import 'tooltip.dart';
 
 /// 可点区域的动效基元：hover / 按下。builder 拿到状态自己画。
 /// 极简风格用得很克制：120ms、只改底色和描边。
@@ -61,21 +62,23 @@ const Duration kJoTapMs = Duration(milliseconds: 120);
 /// 悬停 / 按下：底色浮起（文字色 9% / 20%），图标从次要色亮到正文色。
 /// 不做描边——那是“每个图标一个小盒子”，界面里别的工具栏不是那样。
 ///
+/// **tip 是必填的**：界面上的图标一律要能悬停看出名字。
+///
 /// [inverted] 是实底强调色 + 底色图标，给主行动用（比如发送）。
 class JoIconAction extends StatelessWidget {
   const JoIconAction({
     super.key,
     required this.icon,
+    required this.tip,
     required this.onTap,
-    this.tip,
     this.size = 16,
     this.inverted = false,
   });
 
   final IconData icon;
 
-  /// 名字。现在只给代码看（还没做悬停提示），将来要用就在这儿。
-  final String? tip;
+  /// 悬停时浮出来的名字。必填，不许留空。
+  final String tip;
 
   final VoidCallback onTap;
   final double size;
@@ -86,31 +89,34 @@ class JoIconAction extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final JoPalette p = JoTheme.of(context);
-    return JoTap(
-      onTap: onTap,
-      opaque: false,
-      builder: (BuildContext c, bool hover, bool down) {
-        final double a = down ? 0.20 : (hover ? 0.09 : 0.0);
-        // 反色的底色：往正文色那一侧混，所以暗主题会变亮、亮主题会变深 ——
-        // 两边都是“更醒目”。直接混背景色会反掉。
-        final Color bgColor = inverted
-            ? Color.alphaBlend(
-                p.text.withValues(alpha: hover || down ? 0.28 : 0.0),
-                p.accent,
-              )
-            : p.icon.withValues(alpha: a);
-        final Color fgColor = inverted
-            ? p.bg
-            : ((hover || down) ? p.text : p.icon);
-        return AnimatedContainer(
-          duration: kJoTapMs,
-          curve: Curves.easeOut,
-          // 内边距**四边一样**。写成一宽一窄，图标在框里就是偏的。
-          padding: const EdgeInsets.all(6),
-          decoration: BoxDecoration(color: bgColor),
-          child: Icon(icon, size: size, color: fgColor),
-        );
-      },
+    return JoTooltip(
+      text: tip,
+      child: JoTap(
+        onTap: onTap,
+        opaque: false,
+        builder: (BuildContext c, bool hover, bool down) {
+          final double a = down ? 0.20 : (hover ? 0.09 : 0.0);
+          // 反色的底色：往正文色那一侧混，所以暗主题会变亮、亮主题会变深 ——
+          // 两边都是“更醒目”。直接混背景色会反掉。
+          final Color bgColor = inverted
+              ? Color.alphaBlend(
+                  p.text.withValues(alpha: hover || down ? 0.28 : 0.0),
+                  p.accent,
+                )
+              : p.icon.withValues(alpha: a);
+          final Color fgColor = inverted
+              ? p.bg
+              : ((hover || down) ? p.text : p.icon);
+          return AnimatedContainer(
+            duration: kJoTapMs,
+            curve: Curves.easeOut,
+            // 内边距**四边一样**。写成一宽一窄，图标在框里就是偏的。
+            padding: const EdgeInsets.all(6),
+            decoration: BoxDecoration(color: bgColor),
+            child: Icon(icon, size: size, color: fgColor),
+          );
+        },
+      ),
     );
   }
 }
@@ -122,6 +128,7 @@ class JoButton extends StatelessWidget {
     required this.onTap,
     this.color,
     this.bordered = false,
+    this.tip,
   });
 
   final String text;
@@ -129,11 +136,14 @@ class JoButton extends StatelessWidget {
   final Color? color;
   final bool bordered;
 
+  /// 悬停文字提示。给“×”、“↺”这类只有个符号的按钮用。
+  final String? tip;
+
   @override
   Widget build(BuildContext context) {
     final JoPalette p = JoTheme.of(context);
     final Color base = color ?? p.secondary;
-    return JoTap(
+    final Widget button = JoTap(
       onTap: onTap,
       opaque: false,
       builder: (BuildContext context, bool hover, bool down) {
@@ -163,6 +173,7 @@ class JoButton extends StatelessWidget {
         );
       },
     );
+    return tip == null ? button : JoTooltip(text: tip!, child: button);
   }
 }
 

@@ -1,4 +1,4 @@
-// 右栏底部的“编辑”按钮，以及它打开的**大编辑弹窗**。
+// 右栏底部的“编辑”图标（铅笔），以及它打开的**大编辑弹窗**。
 //
 // 弹窗里是三个标签页：世界观 / 记忆 / 模型。
 // 状态集中在弹窗里，保存时一次性交回去。
@@ -10,8 +10,10 @@ import '../model/memory.dart';
 import '../model/model_plan.dart';
 import '../theme/tokens.dart';
 import 'common.dart';
+import 'icons.dart';
 import 'memory_panel.dart';
 import 'model_plan_dialog.dart';
+import 'tooltip.dart';
 
 /// 底部常驻的“编辑”按钮。
 class WorldEditButton extends StatelessWidget {
@@ -33,9 +35,11 @@ class WorldEditButton extends StatelessWidget {
         horizontal: JoSpace.s3,
         vertical: JoSpace.s2,
       ),
+      // 先前是“编辑”两个字；换成铅笔图标，悬停浮底色、图标亮一档 ——
+      // 跟左下角那个设置齿轮、发言框旁那几个工具按钮一个做法。
       child: Align(
         alignment: Alignment.centerLeft,
-        child: JoButton(text: '编辑', onTap: onTap, color: p.accent),
+        child: JoIconAction(icon: JoIcons.pencil, tip: '编辑这个世界', onTap: onTap),
       ),
     );
   }
@@ -313,7 +317,11 @@ class _EditDialogState extends State<_EditDialog> {
                   style: JoFonts.meta.copyWith(color: p.secondary),
                 ),
               ),
-              JoButton(text: '×', onTap: () => Navigator.of(context).pop()),
+              JoButton(
+                text: '×',
+                tip: '关闭',
+                onTap: () => Navigator.of(context).pop(),
+              ),
             ],
           ),
           const SizedBox(height: JoSpace.s3),
@@ -512,19 +520,22 @@ class _EditDialogState extends State<_EditDialog> {
                 ),
               ),
               const SizedBox(width: JoSpace.s2),
-              JoTap(
-                onTap: () => _removeChar(i),
-                opaque: false,
-                builder: (BuildContext context, bool hover, bool down) {
-                  return AnimatedDefaultTextStyle(
-                    duration: kJoTapMs,
-                    curve: Curves.easeOut,
-                    style: JoFonts.meta.copyWith(
-                      color: hover ? p.accent : p.secondary,
-                    ),
-                    child: const Text('×'),
-                  );
-                },
+              JoTooltip(
+                text: '移除这个角色',
+                child: JoTap(
+                  onTap: () => _removeChar(i),
+                  opaque: false,
+                  builder: (BuildContext context, bool hover, bool down) {
+                    return AnimatedDefaultTextStyle(
+                      duration: kJoTapMs,
+                      curve: Curves.easeOut,
+                      style: JoFonts.meta.copyWith(
+                        color: hover ? p.accent : p.secondary,
+                      ),
+                      child: const Text('×'),
+                    );
+                  },
+                ),
               ),
             ],
           ),

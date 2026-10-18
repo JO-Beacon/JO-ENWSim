@@ -7,6 +7,7 @@ import 'package:joenws/main.dart';
 import 'package:joenws/theme/settings_store.dart';
 import 'package:joenws/theme/tokens.dart';
 import 'package:joenws/ui/common.dart';
+import 'package:joenws/ui/icons.dart';
 import 'package:joenws/ui/jo_localizations.dart';
 import 'package:shared_preferences/shared_preferences.dart';
 
@@ -162,6 +163,95 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(find.text('这一步'), findsOneWidget);
+  });
+
+  // 左栏每张世界卡片上的铅笔：在**右边**、跟整张卡片**上下居中**。
+  testWidgets('App 里：左栏卡片上的铅笔靠右且上下居中', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SettingsStore store = await SettingsStore.open();
+    final WorldStore worldStore = WorldStore.memory()..seedDemo();
+    addTearDown(worldStore.close);
+    await tester.pumpWidget(
+      JoEnwsApp(
+        store: store,
+        worldStore: worldStore,
+        initialWorlds: worldStore.loadWorlds().worlds,
+        initial: const JoSettings(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Rect icon = tester.getRect(find.byIcon(JoIcons.pencil).first);
+    final Rect name = tester.getRect(find.text('旧宅 · 雨夜').first);
+    final Rect note = tester.getRect(find.text('三个地点 · 一场雨').first);
+
+    // 靠右：在名字那一块的右侧。
+    expect(icon.left, greaterThan(name.right));
+    // 上下居中：图标中心 ≈ 名字到副标题这一块的正中。
+    expect(icon.center.dy, closeTo((name.top + note.bottom) / 2, 6));
+  });
+
+  // 右栏底部那个入口现在是铅笔图标（以前是“编辑”两个字）。
+  // 这里验两件事：图标在、点得开弹窗。
+  testWidgets('App 里：底部是铅笔图标，点了打开编辑弹窗', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SettingsStore store = await SettingsStore.open();
+    final WorldStore worldStore = WorldStore.memory()..seedDemo();
+    addTearDown(worldStore.close);
+    await tester.pumpWidget(
+      JoEnwsApp(
+        store: store,
+        worldStore: worldStore,
+        initialWorlds: worldStore.loadWorlds().worlds,
+        initial: const JoSettings(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    // 左栏每个世界卡片上有一支，右栏底部一支（都是铅笔）。
+    expect(find.byIcon(JoIcons.pencil), findsWidgets);
+    // 右栏底部那支在最后（左栏先画）。
+    await tester.tap(find.byIcon(JoIcons.pencil).last);
+    await tester.pumpAndSettle();
+    // 弹窗开了：五个标签页里第一个是“常规”。
+    expect(find.text('常规'), findsOneWidget);
+    // 弹窗标题也叫“编辑”，左栏卡片上也有“编辑”—— 所以只要求能找到。
+    expect(find.text('编辑'), findsWidgets);
+  });
+
+  // 图标一律有悬停提示：停上去停一会儿，就能看到它叫什么。
+  testWidgets('App 里：铅笔图标悬停会浮出名字', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SettingsStore store = await SettingsStore.open();
+    final WorldStore worldStore = WorldStore.memory()..seedDemo();
+    addTearDown(worldStore.close);
+    await tester.pumpWidget(
+      JoEnwsApp(
+        store: store,
+        worldStore: worldStore,
+        initialWorlds: worldStore.loadWorlds().worlds,
+        initial: const JoSettings(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final TestGesture mouse = await tester.createGesture(
+      kind: PointerDeviceKind.mouse,
+    );
+    await mouse.addPointer(location: Offset.zero);
+    addTearDown(mouse.removePointer);
+    await tester.pump();
+
+    await mouse.moveTo(tester.getCenter(find.byIcon(JoIcons.pencil).last));
+    await tester.pump();
+    expect(find.text('编辑这个世界'), findsNothing);
+    await tester.pump(const Duration(milliseconds: 420));
+    await tester.pump();
+    expect(find.text('编辑这个世界'), findsOneWidget);
+
+    await mouse.moveTo(const Offset(1, 1));
+    await tester.pumpAndSettle();
+    expect(find.text('编辑这个世界'), findsNothing);
   });
 
   // 换世界：内容要先淡下去、换完再淡回来（左栏的世界列表不动）。

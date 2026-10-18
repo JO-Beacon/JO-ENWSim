@@ -6,6 +6,7 @@ import '../model/provider_api.dart';
 import '../theme/tokens.dart';
 import 'add_provider_dialog.dart';
 import 'common.dart';
+import 'tooltip.dart';
 
 /// “服务商”：左列表（分组可折叠）+ 右详情（Key / 地址 / 模型）。
 class ProviderPanel extends StatefulWidget {
@@ -924,22 +925,27 @@ class _ProviderPanelState extends State<ProviderPanel> {
                             ),
                           ),
                         const SizedBox(width: JoSpace.s3),
-                        GestureDetector(
-                          onTap: () {
-                            _openModels.remove(m);
-                            _replace(
-                              x.copyWith(
-                                models: x.models
-                                    .where((ModelRef y) => !identical(y, m))
-                                    .toList(),
+                        JoTooltip(
+                          text: '移除这个模型',
+                          child: GestureDetector(
+                            onTap: () {
+                              _openModels.remove(m);
+                              _replace(
+                                x.copyWith(
+                                  models: x.models
+                                      .where((ModelRef y) => !identical(y, m))
+                                      .toList(),
+                                ),
+                              );
+                            },
+                            child: MouseRegion(
+                              cursor: SystemMouseCursors.click,
+                              child: Text(
+                                '×',
+                                style: JoFonts.meta.copyWith(
+                                  color: p.secondary,
+                                ),
                               ),
-                            );
-                          },
-                          child: MouseRegion(
-                            cursor: SystemMouseCursors.click,
-                            child: Text(
-                              '×',
-                              style: JoFonts.meta.copyWith(color: p.secondary),
                             ),
                           ),
                         ),

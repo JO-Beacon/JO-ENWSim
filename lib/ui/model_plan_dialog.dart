@@ -208,7 +208,11 @@ class _PickerDialog extends StatelessWidget {
             ),
           ),
           const Spacer(),
-          JoButton(text: '×', onTap: () => Navigator.of(context).pop()),
+          JoButton(
+            text: '×',
+            tip: '关闭',
+            onTap: () => Navigator.of(context).pop(),
+          ),
         ],
       ),
     );
@@ -365,7 +369,11 @@ class _PlanDialogState extends State<_PlanDialog> {
               style: JoFonts.meta.copyWith(color: p.secondary),
             ),
           ),
-          JoButton(text: '×', onTap: () => Navigator.of(context).pop()),
+          JoButton(
+            text: '×',
+            tip: '关闭',
+            onTap: () => Navigator.of(context).pop(),
+          ),
         ],
       ),
     );

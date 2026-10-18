@@ -4,6 +4,8 @@ import 'package:flutter_markdown_plus/flutter_markdown_plus.dart';
 import 'package:markdown/markdown.dart' as md;
 import 'package:url_launcher/url_launcher.dart';
 
+import '../theme/tokens.dart';
+
 class MarkdownMessage extends StatelessWidget {
   const MarkdownMessage({super.key, required this.data});
 
@@ -22,7 +24,9 @@ class MarkdownMessage extends StatelessWidget {
         pPadding: EdgeInsets.zero,
         blockSpacing: 10,
         code: TextStyle(
-          fontFamily: 'monospace',
+          // 不用 'monospace' 这种泛称：Windows 上没这个字体族，
+          // 会落回引擎自带的 Roboto。代码块也用思源，统一。
+          fontFamily: JoFonts.sans,
           color: colorScheme.onSurfaceVariant,
           backgroundColor: colorScheme.surfaceContainerHighest,
         ),
@@ -104,7 +108,7 @@ class _CodeBlockBuilder extends MarkdownElementBuilder {
             child: SelectableText(
               code,
               style: (preferredStyle ?? Theme.of(context).textTheme.bodyMedium)
-                  ?.copyWith(fontFamily: 'monospace'),
+                  ?.copyWith(fontFamily: JoFonts.sans),
             ),
           ),
         ],

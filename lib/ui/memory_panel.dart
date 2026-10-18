@@ -9,6 +9,7 @@ import '../model/memory.dart';
 import '../theme/tokens.dart';
 import 'common.dart';
 import 'icons.dart';
+import 'tooltip.dart';
 
 /// 打开记忆弹窗（跟模型、编辑一样，是弹窗不是全屏）。
 Future<void> showMemoryDialog(
@@ -279,19 +280,22 @@ class _MemoryPanelState extends State<MemoryPanel> {
                 ),
               ),
               const SizedBox(width: JoSpace.s2),
-              JoTap(
-                onTap: () => _remove(e),
-                opaque: false,
-                builder: (BuildContext context, bool hover, bool down) {
-                  return AnimatedDefaultTextStyle(
-                    duration: kJoTapMs,
-                    curve: Curves.easeOut,
-                    style: JoFonts.meta.copyWith(
-                      color: hover ? p.accent : p.secondary,
-                    ),
-                    child: const Text('×'),
-                  );
-                },
+              JoTooltip(
+                text: '删除这条记忆',
+                child: JoTap(
+                  onTap: () => _remove(e),
+                  opaque: false,
+                  builder: (BuildContext context, bool hover, bool down) {
+                    return AnimatedDefaultTextStyle(
+                      duration: kJoTapMs,
+                      curve: Curves.easeOut,
+                      style: JoFonts.meta.copyWith(
+                        color: hover ? p.accent : p.secondary,
+                      ),
+                      child: const Text('×'),
+                    );
+                  },
+                ),
               ),
             ],
           ),
