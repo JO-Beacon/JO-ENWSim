@@ -134,4 +134,120 @@ void main() {
     et = tester.widget<EditableText>(find.byType(EditableText));
     expect(et.controller.text, before);
   });
+
+  // 画布的选中动画：点开一张卡，它会慢慢变高、下面几行跟着让位。
+  // 这里验的是“过渡中不炸”（卡按完整高度排版、外面裁成动画高度）
+  // 以及选中之后右栏确实切到了“这一步”。
+  testWidgets('App 里：点开一张卡有过渡，且不溢出', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SettingsStore store = await SettingsStore.open();
+    final WorldStore worldStore = WorldStore.memory()..seedDemo();
+    addTearDown(worldStore.close);
+    await tester.pumpWidget(
+      JoEnwsApp(
+        store: store,
+        worldStore: worldStore,
+        initialWorlds: worldStore.loadWorlds().worlds,
+        initial: const JoSettings(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder card = find.text('正厅的灯亮着。人物1站在楼梯口，没有动。');
+    await tester.tap(card);
+    await tester.pump();
+    // 动画跑到一半：既没抛溢出，卡也已经变高了。
+    await tester.pump(const Duration(milliseconds: 60));
+    expect(tester.takeException(), isNull);
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    expect(find.text('这一步'), findsOneWidget);
+  });
+
+  // 换世界：内容要先淡下去、换完再淡回来（左栏的世界列表不动）。
+  testWidgets('App 里：换世界有过渡（淡出 → 换 → 淡入）', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SettingsStore store = await SettingsStore.open();
+    final WorldStore worldStore = WorldStore.memory()..seedDemo();
+    addTearDown(worldStore.close);
+    await tester.pumpWidget(
+      JoEnwsApp(
+        store: store,
+        worldStore: worldStore,
+        initialWorlds: worldStore.loadWorlds().worlds,
+        initial: const JoSettings(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    Iterable<FadeTransition> fades() =>
+        tester.widgetList<FadeTransition>(find.byType(FadeTransition));
+
+    // 一开始是满的。
+    expect(fades().every((FadeTransition f) => f.opacity.value > 0.99), isTrue);
+
+    // 点左栏里另一个世界（第一个就是当前世界，所以点第二个）。
+    await tester.tap(find.text('海边小镇').first);
+    await tester.pump();
+    await tester.pump(const Duration(milliseconds: 40));
+    expect(
+      fades().any((FadeTransition f) => f.opacity.value < 0.99),
+      isTrue,
+      reason: '换世界应该先把内容淡下去，而不是一秒换一张',
+    );
+
+    await tester.pumpAndSettle();
+    expect(tester.takeException(), isNull);
+    // 换完了：内容里能看到新世界（标题栏）的名字，淡入也回到满。
+    expect(find.text('海边小镇'), findsWidgets);
+    expect(fades().every((FadeTransition f) => f.opacity.value > 0.99), isTrue);
+  });
+
+  // App 里的流程图：默认收起一行；点开就在右栏里**顺下去**（不盖住详情），
+  // 再点一下又能收起。这条验的是**接线**（状态与布局），不验画得漂不漂亮。
+  testWidgets('App 里：右栏流程图能展开，且详情还在下面', (WidgetTester tester) async {
+    SharedPreferences.setMockInitialValues(<String, Object>{});
+    final SettingsStore store = await SettingsStore.open();
+    final WorldStore worldStore = WorldStore.memory()..seedDemo();
+    addTearDown(worldStore.close);
+    await tester.pumpWidget(
+      JoEnwsApp(
+        store: store,
+        worldStore: worldStore,
+        initialWorlds: worldStore.loadWorlds().worlds,
+        initial: const JoSettings(),
+      ),
+    );
+    await tester.pumpAndSettle();
+
+    final Finder diagram = find.byKey(const ValueKey<String>('flow-diagram'));
+
+    // 默认收起：只有一行，没有图。
+    expect(find.text('回合流程'), findsOneWidget);
+    expect(diagram, findsNothing);
+
+    await tester.tap(find.text('回合流程'));
+    await tester.pumpAndSettle();
+    expect(diagram, findsOneWidget);
+    expect(find.text('收起'), findsOneWidget);
+    // **详情没被盖住也没被挤走**：展开后它被顶到图下面，往下滚就能看到。
+    await tester.dragUntilVisible(
+      find.text('世界观'),
+      find.byKey(const ValueKey<String>('side-scroll')),
+      const Offset(0, -200),
+    );
+    await tester.pumpAndSettle();
+    expect(find.text('世界观'), findsOneWidget);
+
+    // 滚回顶部再收起。
+    await tester.drag(
+      find.byKey(const ValueKey<String>('side-scroll')),
+      const Offset(0, 3000),
+    );
+    await tester.pumpAndSettle();
+    await tester.tap(find.text('回合流程'));
+    await tester.pumpAndSettle();
+    expect(diagram, findsNothing);
+    expect(find.text('展开'), findsOneWidget);
+  });
 }

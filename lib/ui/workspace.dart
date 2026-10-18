@@ -1,9 +1,13 @@
+import 'dart:math' as math;
+
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
 import '../data/world_store.dart';
 import '../engine/engine.dart';
+import '../theme/settings_store.dart';
 import '../model/demo.dart';
 import '../model/turn.dart';
 import '../model/char_choices.dart';
@@ -15,9 +19,12 @@ import '../model/provider.dart';
 import '../model/shortcuts.dart';
 import '../theme/tokens.dart';
 import 'common.dart';
+import 'card_extra.dart';
 import 'icons.dart';
+import 'lane_focus.dart';
 import 'char_choices_dialog.dart';
 import 'model_plan_dialog.dart';
+import 'splitter.dart';
 import 'turn_flow.dart';
 import 'world_settings.dart';
 import 'new_world_dialog.dart';
@@ -51,6 +58,7 @@ class Workspace extends StatefulWidget {
     this.worldsNote,
     this.prompts = const <String, String>{},
     this.onPromptsChanged,
+    this.settingsStore,
   });
 
   /// 全局模型默认（设置 → 引擎里那两级）。
@@ -83,12 +91,26 @@ class Workspace extends StatefulWidget {
   final List<Provider> providers;
   final ValueChanged<List<Provider>> onProvidersChanged;
 
+  /// 存档：两侧栏拖出来的宽度存这儿（没有就每次用默认值）。
+  final SettingsStore? settingsStore;
+
   @override
   State<Workspace> createState() => _WorkspaceState();
 }
 
-class _WorkspaceState extends State<Workspace>
-    with SingleTickerProviderStateMixin {
+/// 两侧栏宽度的边界与默认值（像素）。
+///
+/// 最大宽度不写死：每次布局按“窗口宽 − 另一栏 − 画布最小宽”现算，
+/// 所以窗口拉小也不会把画布挤没。默认值 = 双击复位的地方。
+const double _kRailMin = 160;
+const double _kRailDef = 196;
+const double _kSideMin = 200;
+const double _kSideDef = 300;
+
+/// 画布至少要留这么宽（两侧栏算最大宽度时扣它）。
+const double _kCanvasMin = 320;
+
+class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   final TextEditingController _input = TextEditingController();
   final TransformationController _tc = TransformationController();
   Size _viewport = Size.zero;
@@ -96,8 +118,16 @@ class _WorkspaceState extends State<Workspace>
   _Page _page = _Page.main;
   late List<World> _worlds = List<World>.of(widget.worlds);
   late String _worldId = _worlds.isEmpty ? '' : _worlds.first.id;
-  double _railW = 196;
-  double _sideW = 300;
+
+  /// 两侧栏宽度。**记着的人想要的宽度**，实际画的时候再按窗口收一道，
+  /// 所以窗口拉小了不会被撑破，拉回去又能恢复。
+  late double _railW = widget.settingsStore?.loadRailW() ?? _kRailDef;
+  late double _sideW = widget.settingsStore?.loadSideW() ?? _kSideDef;
+
+  /// 栏宽存盘（松手时调）。
+  void _saveWidths() {
+    widget.settingsStore?.saveWidths(railW: _railW, sideW: _sideW);
+  }
 
   /// 记忆：按世界分。每份里 key 空 = 上帝，其它 = 角色名。
   /// 现在只是孤立的数据，不接入回合流程。
@@ -123,6 +153,15 @@ class _WorkspaceState extends State<Workspace>
   String? _flowActive;
   final Set<String> _flowDone = <String>{};
 
+  /// 右栏那张流程图展开着没有。
+  ///
+  /// 默认收起（只占一行）；推演一开始自动展开，跑完保持展开；
+  /// 手动点一下就能收起。
+  bool _flowOpen = false;
+
+  /// 右栏的滚动（展开流程图后详情被顶到下面，靠它滚过去；推演开始时滚回顶部看图）。
+  final ScrollController _sideScroll = ScrollController();
+
   /// 角色的“选择”（采样策略 / 最大输出 / 流式 / 推理档位 / JSON）。
   /// 按世界分，世界里再按角色名分——**每个角色各有一套**。
   final Map<String, Map<String, CharChoices>> _choices =
@@ -140,12 +179,28 @@ class _WorkspaceState extends State<Workspace>
   /// 每世界的模型配置（世界默认 + 逐步骤）。现在只在内存里。
   final Map<String, ModelPlan> _plans = <String, ModelPlan>{};
 
-  /// 聚焦展开的动画：卡片、表头、底层连线都用同一份插值列宽。
-  String? _animId;
-  late final AnimationController _focusAnim = AnimationController(
-    vsync: this,
-    duration: const Duration(milliseconds: 220),
-  );
+  /// 画布上“展开某一列”的过渡。
+  ///
+  /// **每列各走各的**，所以从 A 换到 B 时，A 一边收回、B 一边展开，
+  /// 两个方向同时在动（以前一根全局 0→1 进度条做不到，换列时没动画）。
+  final LaneFocus _laneFocus = LaneFocus();
+
+  /// 推进过渡的节拍器。走到位就停，不白占每一帧。
+  late final Ticker _focusTicker = createTicker(_tickFocus);
+  Duration? _lastTick;
+
+  /// 每张“正在变高 / 正在收回去”的卡多出来多少高度。
+  ///
+  /// 按卡（列 id + 行）分别记，因为换选中时**旧的要收、新的要长**，
+  /// 两件事得同时成立；只记一个数就会“旧的直接缩没、新的那段位移投错地方”。
+  final CardExtra _extra = CardExtra();
+
+  /// 现在这个选中状态对应的那张卡、它该多高。
+  (String, int)? get _selKey {
+    final String? laneId = _focused;
+    final int row = _selRow;
+    return (laneId != null && row >= 0) ? (laneId, row) : null;
+  }
 
   World get _world {
     for (final World w in _worlds) {
@@ -232,15 +287,41 @@ class _WorkspaceState extends State<Workspace>
     return rows[idx];
   }
 
-  /// 列宽。聚焦过渡中，卡片、表头、**底层连线**都是用这个值算的，
-  /// 所以它们会一起动，不会错位。
-  /// 列宽。聚焦过渡中，卡片、表头、底层连线都用这个值算，
-  /// 所以它们会一起动，不会错位。
-  double _colW(String id) {
-    if (_animId == null) return _wCompact;
-    final double t = Curves.easeOutCubic.transform(_focusAnim.value);
-    final double target = id == _animId ? _wFocus : _wShrunk;
-    return _wCompact + (target - _wCompact) * t;
+  /// 列宽：常规 → （有人展开时）收窄 → （自己展开时）整列宽。
+  /// 过渡中卡片、表头、**底层连线**都用这一个值算，所以它们一起动、不会错位。
+  double _colW(String id) => _laneFocus.width(
+    id,
+    compact: _wCompact,
+    shrunk: _wShrunk,
+    focus: _wFocus,
+  );
+
+  /// 每帧把各列的展开程度往目标推一点（指数趋近，和帧率无关）。
+  void _tickFocus(Duration elapsed) {
+    final double dt = _lastTick == null
+        ? 1 / 60
+        : (elapsed - _lastTick!).inMicroseconds / 1000000;
+    _lastTick = elapsed;
+    bool moving = _laneFocus.advance(dt, _world.lanes.map((SeqLane l) => l.id));
+
+    // 各张卡的高度也跟着同一套节拍长 / 缩。
+    // 目标：被选中那张 → _selExtra；其它（含刚被取消选中的那张）→ 0。
+    if (_extra.advance(dt, target: _selKey, targetValue: _selExtra)) {
+      moving = true;
+    }
+
+    if (moving) {
+      setState(() {});
+    } else {
+      _focusTicker.stop();
+    }
+  }
+
+  /// 目标变了就喊一声，让节拍器跑起来。
+  void _kickFocus() {
+    if (_focusTicker.isActive) return;
+    _lastTick = null;
+    _focusTicker.start();
   }
 
   Map<String, double> get _colX {
@@ -262,18 +343,49 @@ class _WorkspaceState extends State<Workspace>
   }
 
   double get _totalH =>
-      kHeaderH + _maxRows * _rowH + _padBottom + (_selRow >= 0 ? _selExtra : 0);
+      kHeaderH + _maxRows * _rowH + _padBottom + _extra.padAbove(_maxRows);
 
   // 选中那行之后整体下移，免得拉高的卡片盖住下面的。
-  double _rowTop(int i) =>
-      kHeaderH + i * _rowH + (i > _selRow && _selRow >= 0 ? _selExtra : 0);
+  // 让位量是动画值：选中时慢慢让开，取消选中时慢慢收回去。
+  double _rowTop(int i) => kHeaderH + i * _rowH + _extra.padAbove(i);
 
-  void _pickWorld(String id) {
+  bool _switching = false;
+
+  /// 换世界时那一下淡出 / 淡入。
+  ///
+  /// 直接换世界＝画面一秒换一张，观感很突然；换的时候先把整个工作台淡下去，
+  /// 换完再淡回来。连点不会叠（正在换就忽略）。
+  late final AnimationController _worldFade = AnimationController(
+    vsync: this,
+    value: 1,
+    duration: const Duration(milliseconds: 200),
+    reverseDuration: const Duration(milliseconds: 110),
+  );
+
+  /// 换到一个世界：淡出 → 真换 → 淡入。
+  Future<void> _switchWorld(String id) async {
+    if (id == _worldId || _switching) return;
+    _switching = true;
+    // 先清选中：不然淡出的时候还看着上一份的展开卡。
     setState(() {
-      _worldId = id;
       _focused = null;
       _selected = null;
+      // 列 id 会重名（l1/l2…），旧的动画进度不能带过去。
+      _laneFocus.clear();
+      _extra.clear();
     });
+    await _worldFade.reverse();
+    if (!mounted) {
+      _switching = false;
+      return;
+    }
+    setState(() => _worldId = id);
+    await _worldFade.forward();
+    _switching = false;
+  }
+
+  void _pickWorld(String id) {
+    _switchWorld(id);
   }
 
   Future<void> _newWorld() async {
@@ -282,16 +394,14 @@ class _WorkspaceState extends State<Workspace>
     setState(() {
       _worlds.add(w);
       widget.store.saveWorld(w);
-      _worldId = w.id;
-      _focused = null;
-      _selected = null;
     });
+    await _switchWorld(w.id);
   }
 
   /// 卡片上的“编辑”：跟右栏底部那个是**同一个入口** —— 打开编辑弹窗。
   /// 之前它开的是“创建向导”那个合体弹窗，那才是要修的。
   Future<void> _editWorld(World w) async {
-    if (w.id != _worldId) setState(() => _worldId = w.id);
+    if (w.id != _worldId) await _switchWorld(w.id);
     await _openEdit();
   }
 
@@ -402,19 +512,12 @@ class _WorkspaceState extends State<Workspace>
   void _focusLane(String id, {int? index}) {
     final bool closing = _focused == id && index == null;
     setState(() {
-      if (closing) {
-        _focused = null;
-        _selected = null;
-        _focusAnim.reverse().whenComplete(() {
-          if (mounted && _focused == null) setState(() => _animId = null);
-        });
-      } else {
-        _focused = id;
-        _selected = index;
-        _animId = id;
-        _focusAnim.forward();
-      }
+      _focused = closing ? null : id;
+      _selected = closing ? null : index;
     });
+    // 各列自己往目标走：新点的那列展开、原来那列收回，两边同时动。
+    _laneFocus.focus(closing ? null : id);
+    _kickFocus();
   }
 
   /// 可选的模型：启用的服务商下面、启用着的模型。
@@ -541,12 +644,25 @@ class _WorkspaceState extends State<Workspace>
   void dispose() {
     _input.dispose();
     _tc.dispose();
-    _focusAnim.dispose();
+    _focusTicker.dispose();
+    _worldFade.dispose();
+    _sideScroll.dispose();
     super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
+    // 选中 / 取消选中共之后，卡高和下面让位都得动一下。
+    // 不管从哪个入口改的选中（点卡、右栏的 ×、换世界……），
+    // 都会走到 build，所以在这儿统一叫醒节拍器，不用每个入口各写一遍。
+    // 选中 / 取消选中之后，卡高和下面让位都要动一下。
+    // 不管从哪个入口改的选中（点卡、右栏的 ×、换世界……），
+    // 都会走到 build，所以在这儿统一叫醒节拍器，不用每个入口各写一遍。
+    if (!_focusTicker.isActive &&
+        _extra.needsAdvance(target: _selKey, targetValue: _selExtra)) {
+      _kickFocus();
+    }
+
     final Widget body = _page == _Page.settings
         ? SettingsPage(
             settings: widget.settings,
@@ -635,6 +751,12 @@ class _WorkspaceState extends State<Workspace>
     setState(() {
       _flowDone.clear();
       _flowActive = null;
+      // 推演开始：自动展开流程图（跑的时候正要看着它亮）。
+      _flowOpen = true;
+    });
+    // 图在右栏顶部：滚回去，否则上一轮手动滚到下面时就看不到点灯了。
+    WidgetsBinding.instance.addPostFrameCallback((_) {
+      if (_sideScroll.hasClients) _sideScroll.jumpTo(0);
     });
     try {
       final Engine e = Engine(
@@ -682,9 +804,9 @@ class _WorkspaceState extends State<Workspace>
             setState(() {
               _focused = l.id;
               _selected = freshIndex;
-              _animId = l.id;
             });
-            _focusAnim.forward();
+            _laneFocus.focus(l.id);
+            _kickFocus();
           }
           break;
         }
@@ -792,121 +914,178 @@ class _WorkspaceState extends State<Workspace>
 
     return Container(
       color: p.bg,
-      child: Row(
-        children: <Widget>[
-          SizedBox(
-            width: _railW,
-            child: _WorldRail(
-              palette: p,
-              worlds: _worlds,
-              currentId: _worldId,
-              onPick: _pickWorld,
-              onNew: _newWorld,
-              onEdit: _editWorld,
-              isDark: widget.settings.isDark,
-              onSettings: () => setState(() => _page = _Page.settings),
-              onTheme: () => widget.onSettingsChanged(
-                widget.settings.copyWith(isDark: !widget.settings.isDark),
-              ),
-            ),
-          ),
-          _VDrag(
-            palette: p,
-            onDrag: (double d) =>
-                setState(() => _railW = (_railW + d).clamp(160.0, 360.0)),
-          ),
-          Expanded(
-            child: Column(
-              // stretch：不然子项拿松约束，顶栏只按内容宽度居中排，
-              // 右边那两个按钮就贴不到右边界。
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                _TopBar(
+      child: LayoutBuilder(
+        builder: (BuildContext c, BoxConstraints k) {
+          // 两侧栏的最大宽度按窗口现算：先把画布那一块守住（_kCanvasMin），
+          // 剩下的才能归侧栏。窗口一变，两边会自动收回去，但不会把画布挤没。
+          final double total = k.maxWidth;
+          final double railMax = math.max(
+            _kRailMin,
+            total - _sideW - _kCanvasMin - kJoSplitterTotal,
+          );
+          final double sideMax = math.max(
+            _kSideMin,
+            total - _railW - _kCanvasMin - kJoSplitterTotal,
+          );
+          // 存的宽度可能比现在窗口能容纳的大（上次拉大了）：画的时候再收一道。
+          final double railW = _railW.clamp(_kRailMin, railMax);
+          final double sideW = _sideW.clamp(_kSideMin, sideMax);
+
+          // 换世界的过渡：**只淡内容**（画布 + 右栏），左边世界列表不动 ——
+          // 它是导航，跟着闪一下反而看不清点到哪了。
+          final Animation<double> fade = CurvedAnimation(
+            parent: _worldFade,
+            curve: Curves.easeOut,
+          );
+          final Animation<Offset> lift =
+              Tween<Offset>(
+                begin: const Offset(0, 0.012),
+                end: Offset.zero,
+              ).animate(
+                CurvedAnimation(parent: _worldFade, curve: Curves.easeOutCubic),
+              );
+          Widget worldFade(Widget child) => FadeTransition(
+            opacity: fade,
+            child: SlideTransition(position: lift, child: child),
+          );
+
+          return Row(
+            children: <Widget>[
+              SizedBox(
+                width: railW,
+                child: _WorldRail(
                   palette: p,
-                  worldName: _world.name,
-                  mode: _engineBusy ? '跑着……' : _mode,
-                  onMode: (String v) {
-                    setState(() => _mode = v);
-                    // “单步”不是选个模式就完了：它是让引擎**跑一次**。
-                    if (v == '单步') _runStepOnce();
-                  },
-                  modeKey: _modeKey,
-                  onHistory: _openHistory,
-                ),
-                Expanded(
-                  child: _world.lanes.isEmpty
-                      ? _EmptyWorld(palette: p)
-                      : _canvas(p),
-                ),
-                // 没有玩家角色的话，下面这一整套（模型 / 选择 / 工具 / 输入框）都不摆。
-                if (_world.playerName.isNotEmpty) ...<Widget>[
-                  _ComposeBar(
-                    palette: p,
-                    model: _worldModelLabel,
-                    onChoices: _pickChoices,
-                    onPickModel: _pickModel,
+                  worlds: _worlds,
+                  currentId: _worldId,
+                  onPick: _pickWorld,
+                  onNew: _newWorld,
+                  onEdit: _editWorld,
+                  isDark: widget.settings.isDark,
+                  onSettings: () => setState(() => _page = _Page.settings),
+                  onTheme: () => widget.onSettingsChanged(
+                    widget.settings.copyWith(isDark: !widget.settings.isDark),
                   ),
-                  // 输入框只在**这个世界有玩家角色**时出现。
-                  // 没有玩家角色 = 一切交给 AI，人不用说话。
-                  _InputBar(
-                    palette: p,
-                    settings: widget.settings,
-                    controller: _input,
-                    onSubmit: _submit,
-                    sendKey: widget.keys[JoKey.send] ?? joFallback(JoKey.send),
-                    newlineKey:
-                        widget.keys[JoKey.newline] ?? joFallback(JoKey.newline),
-                  ),
-                ] else
-                  Container(
-                    padding: const EdgeInsets.symmetric(
-                      horizontal: JoSpace.s4,
-                      vertical: JoSpace.s3,
-                    ),
-                    child: Text(
-                      '这个世界没有玩家角色，全交给 AI —— 所以没有输入框。',
-                      style: JoFonts.meta.copyWith(
-                        color: p.secondary,
-                        fontSize: 10,
+                ),
+              ),
+              JoSplitter(
+                palette: p,
+                width: railW,
+                minWidth: _kRailMin,
+                maxWidth: railMax,
+                defaultWidth: _kRailDef,
+                growsRight: true,
+                onResize: (double w) => setState(() => _railW = w),
+                onResizeEnd: _saveWidths,
+              ),
+              Expanded(
+                child: worldFade(
+                  Column(
+                    // stretch：不然子项拿松约束，顶栏只按内容宽度居中排，
+                    // 右边那两个按钮就贴不到右边界。
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      _TopBar(
+                        palette: p,
+                        worldName: _world.name,
+                        mode: _engineBusy ? '跑着……' : _mode,
+                        onMode: (String v) {
+                          setState(() => _mode = v);
+                          // “单步”不是选个模式就完了：它是让引擎**跑一次**。
+                          if (v == '单步') _runStepOnce();
+                        },
+                        modeKey: _modeKey,
+                        onHistory: _openHistory,
                       ),
-                    ),
-                  ),
-              ],
-            ),
-          ),
-          _VDrag(
-            palette: p,
-            onDrag: (double d) =>
-                setState(() => _sideW = (_sideW - d).clamp(200.0, 520.0)),
-          ),
-          SizedBox(
-            width: _sideW,
-            child: Column(
-              crossAxisAlignment: CrossAxisAlignment.stretch,
-              children: <Widget>[
-                Expanded(
-                  child: _SidePanel(
-                    palette: p,
-                    settings: widget.settings,
-                    world: _world,
-                    onEditText: _saveStepText,
-                    focusedLane: _focusedLane,
-                    selectedEvent: _selectedEvent,
-                    selectedIndex: _selected,
-                    flowActive: _flowActive,
-                    flowDone: _flowDone,
-                    onClear: () => setState(() {
-                      _focused = null;
-                      _selected = null;
-                    }),
+                      Expanded(
+                        child: _world.lanes.isEmpty
+                            ? _EmptyWorld(palette: p)
+                            : _canvas(p),
+                      ),
+                      // 没有玩家角色的话，下面这一整套（模型 / 选择 / 工具 / 输入框）都不摆。
+                      if (_world.playerName.isNotEmpty) ...<Widget>[
+                        _ComposeBar(
+                          palette: p,
+                          model: _worldModelLabel,
+                          onChoices: _pickChoices,
+                          onPickModel: _pickModel,
+                        ),
+                        // 输入框只在**这个世界有玩家角色**时出现。
+                        // 没有玩家角色 = 一切交给 AI，人不用说话。
+                        _InputBar(
+                          palette: p,
+                          settings: widget.settings,
+                          controller: _input,
+                          onSubmit: _submit,
+                          sendKey:
+                              widget.keys[JoKey.send] ?? joFallback(JoKey.send),
+                          newlineKey:
+                              widget.keys[JoKey.newline] ??
+                              joFallback(JoKey.newline),
+                        ),
+                      ] else
+                        Container(
+                          padding: const EdgeInsets.symmetric(
+                            horizontal: JoSpace.s4,
+                            vertical: JoSpace.s3,
+                          ),
+                          child: Text(
+                            '这个世界没有玩家角色，全交给 AI —— 所以没有输入框。',
+                            style: JoFonts.meta.copyWith(
+                              color: p.secondary,
+                              fontSize: 10,
+                            ),
+                          ),
+                        ),
+                    ],
                   ),
                 ),
-                // 常驻按钮；编辑与记忆都走弹窗。
-                WorldEditButton(palette: p, onTap: _openEdit),
-              ],
-            ),
-          ),
-        ],
+              ),
+              JoSplitter(
+                palette: p,
+                width: sideW,
+                minWidth: _kSideMin,
+                maxWidth: sideMax,
+                defaultWidth: _kSideDef,
+                growsRight: false,
+                onResize: (double w) => setState(() => _sideW = w),
+                onResizeEnd: _saveWidths,
+              ),
+              SizedBox(
+                width: sideW,
+                child: worldFade(
+                  Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      Expanded(
+                        child: _SidePanel(
+                          palette: p,
+                          settings: widget.settings,
+                          world: _world,
+                          onEditText: _saveStepText,
+                          focusedLane: _focusedLane,
+                          selectedEvent: _selectedEvent,
+                          selectedIndex: _selected,
+                          flowActive: _flowActive,
+                          flowDone: _flowDone,
+                          flowOpen: _flowOpen,
+                          onToggleFlow: () =>
+                              setState(() => _flowOpen = !_flowOpen),
+                          sideScroll: _sideScroll,
+                          onClear: () => setState(() {
+                            _focused = null;
+                            _selected = null;
+                          }),
+                        ),
+                      ),
+                      // 常驻按钮；编辑与记忆都走弹窗。
+                      WorldEditButton(palette: p, onTap: _openEdit),
+                    ],
+                  ),
+                ),
+              ),
+            ],
+          );
+        },
       ),
     );
   }
@@ -981,9 +1160,9 @@ class _WorkspaceState extends State<Workspace>
               boundaryMargin: const EdgeInsets.only(right: 480, bottom: 480),
               // 聚焦展开的动画：卡片 / 表头 / 底层连线都在这里重建，
               // 用的是同一份插值后的列宽，所以不会错位。
-              child: AnimatedBuilder(
-                animation: _focusAnim,
-                builder: (BuildContext context, Widget? _) {
+              // 帧由 _focusTicker 推（它每帧 setState），不用 AnimatedBuilder。
+              child: Builder(
+                builder: (BuildContext context) {
                   final Map<String, double> colX = _colX;
                   return SizedBox(
                     width: _totalW,
@@ -999,9 +1178,7 @@ class _WorkspaceState extends State<Workspace>
                               headerH: kHeaderH,
                               cardH: kCardH,
                               rowH: _rowH,
-                              selRow: _selRow,
-                              selLane: _focused,
-                              selExtra: _selExtra,
+                              extra: _extra.values,
                               gap: kGap,
                               maxRows: _maxRows,
                               rows: _rows,
@@ -1094,19 +1271,30 @@ class _WorkspaceState extends State<Workspace>
       final List<int> r = _rows[lane.id]!;
       for (int i = 0; i < lane.events.length; i++) {
         final bool on = _focused == lane.id && _selected == i;
+        // 这张卡现在多出来的高度（动画值；没在长 / 没收过就是 0）。
+        final double extra = _extra.of(lane.id, r[i]);
         out.add(
           Positioned(
             left: colX[lane.id]!,
             top: _rowTop(r[i]),
             width: _colW(lane.id),
             // 选中的那张拉高 —— 否则正文看不全（卡片高固定 92）。
-            height: on ? kCardH + _selExtra : kCardH,
+            // 高度是动画值；**边框按这个高度画**，所以长高的过程中
+            // 扩出去的那一段也有轮廓（以前外面裁一刀，那一段没边框）。
+            height: kCardH + extra,
             child: _StepCard(
               palette: p,
               settings: widget.settings,
               event: lane.events[i],
               focused: _focused == lane.id,
               selected: on,
+              // 内容按“展开后应有高度”排，露出多少由卡片自己裁：
+              // 收回去的时候内容不会半路重排，不会抽。
+              contentHeight: math.max(
+                kCardH + (on ? _selExtra : 0),
+                kCardH + extra,
+              ),
+              extra: extra,
               onTap: () => _focusLane(lane.id, index: i),
             ),
           ),
@@ -1530,6 +1718,9 @@ class _SidePanel extends StatelessWidget {
     required this.onEditText,
     this.flowActive,
     this.flowDone = const <String>{},
+    this.flowOpen = false,
+    this.onToggleFlow,
+    this.sideScroll,
   });
 
   final JoPalette palette;
@@ -1547,6 +1738,13 @@ class _SidePanel extends StatelessWidget {
   /// 流程图：正在跑的步骤、跑过的步骤。
   final String? flowActive;
   final Set<String> flowDone;
+
+  /// 流程图展开着没有，以及点标题时怎么切。
+  final bool flowOpen;
+  final VoidCallback? onToggleFlow;
+
+  /// 右栏自己的滚动：展开流程图后整个右栏一起滚（推演开始时滚回顶部）。
+  final ScrollController? sideScroll;
 
   @override
   Widget build(BuildContext context) {
@@ -1594,23 +1792,39 @@ class _SidePanel extends StatelessWidget {
               ],
             ),
           ),
-          // 回合流程图：**常驻**在右栏顶部，推演时亮当前步。
-          TurnFlow(palette: p, active: flowActive, done: flowDone),
+          // 回合流程图：默认收起成一行；点开就把整张图展开——
+          // **不覆盖也不挤走**后边的内容，详情顺着往下排，整个右栏一起滚。
           Expanded(
             child: ListView(
-              padding: const EdgeInsets.fromLTRB(
-                JoSpace.s4,
-                0,
-                JoSpace.s4,
-                JoSpace.s4,
-              ),
+              key: const ValueKey<String>('side-scroll'),
+              controller: sideScroll,
               children: <Widget>[
-                if (e != null)
-                  ..._stepDetail(p, lane!, e)
-                else if (lane != null)
-                  ..._laneDetail(p, lane)
-                else
-                  ..._worldDetail(p),
+                TurnFlow(
+                  palette: p,
+                  active: flowActive,
+                  done: flowDone,
+                  expanded: flowOpen,
+                  onToggle: onToggleFlow ?? () {},
+                ),
+                Padding(
+                  padding: const EdgeInsets.fromLTRB(
+                    JoSpace.s4,
+                    JoSpace.s3,
+                    JoSpace.s4,
+                    JoSpace.s4,
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.stretch,
+                    children: <Widget>[
+                      if (e != null)
+                        ..._stepDetail(p, lane!, e)
+                      else if (lane != null)
+                        ..._laneDetail(p, lane)
+                      else
+                        ..._worldDetail(p),
+                    ],
+                  ),
+                ),
               ],
             ),
           ),
@@ -1819,50 +2033,6 @@ class _EmptyWorld extends StatelessWidget {
   }
 }
 
-// ————————————————————————————— 侧栏拖动条
-
-/// 竖拖动条：按住左右拖，改两侧栏宽。
-class _VDrag extends StatefulWidget {
-  const _VDrag({required this.palette, required this.onDrag});
-
-  final JoPalette palette;
-  final ValueChanged<double> onDrag;
-
-  @override
-  State<_VDrag> createState() => _VDragState();
-}
-
-class _VDragState extends State<_VDrag> {
-  bool _hover = false;
-
-  @override
-  Widget build(BuildContext context) {
-    final JoPalette p = widget.palette;
-    return MouseRegion(
-      cursor: SystemMouseCursors.resizeLeftRight,
-      onEnter: (_) => setState(() => _hover = true),
-      onExit: (_) => setState(() => _hover = false),
-      child: GestureDetector(
-        behavior: HitTestBehavior.opaque,
-        onHorizontalDragUpdate: (DragUpdateDetails d) =>
-            widget.onDrag(d.delta.dx),
-        child: SizedBox(
-          width: 6,
-          child: Center(
-            // 平时就是一条普通分隔线；hover 才亮起来变粗，提示“这里能拖”
-            child: AnimatedContainer(
-              duration: kJoTapMs,
-              curve: Curves.easeOut,
-              width: _hover ? 2 : 1,
-              color: _hover ? p.accent : p.border,
-            ),
-          ),
-        ),
-      ),
-    );
-  }
-}
-
 // ————————————————————————————— 步骤卡
 
 class _StepCard extends StatelessWidget {
@@ -1872,6 +2042,8 @@ class _StepCard extends StatelessWidget {
     required this.event,
     required this.focused,
     required this.selected,
+    required this.contentHeight,
+    required this.extra,
     required this.onTap,
   });
 
@@ -1880,75 +2052,94 @@ class _StepCard extends StatelessWidget {
   final TurnStep event;
   final bool focused;
   final bool selected;
+
+  /// 里面内容按多高排版（展开后应有的高度）。
+  final double contentHeight;
+
+  /// 现在多出来的高度（动画值）。>0 就还在长 / 还在收。
+  final double extra;
+
   final VoidCallback onTap;
 
   @override
   Widget build(BuildContext context) {
     final JoPalette p = palette;
-    final bool compact = !focused && !selected;
+    // 过渡中不切“紧凑样式”：不然字号、行数会半路跳一下，看着抽。
+    final bool compact = !focused && !selected && extra < 1;
     final Color whoColor = event.isNarration ? p.accent : p.text;
+    final double pad = compact ? JoSpace.s3 : JoSpace.s4;
     return JoTap(
       onTap: onTap,
       builder: (BuildContext context, bool hover, bool down) {
-        return AnimatedContainer(
-          duration: kJoTapMs,
-          curve: Curves.easeOut,
-          padding: EdgeInsets.all(compact ? JoSpace.s3 : JoSpace.s4),
-          decoration: BoxDecoration(
-            color: event.isNarration
-                ? p.accent.withValues(alpha: hover ? 0.11 : 0.06)
-                : (hover ? p.surface.withValues(alpha: 0.92) : p.surface),
-            border: JoShape.border(
-              selected
-                  ? p.accent
-                  : (event.isNarration
-                        ? p.accent.withValues(alpha: 0.4)
-                        : p.border),
+        return SizedBox.expand(
+          child: AnimatedContainer(
+            duration: kJoTapMs,
+            curve: Curves.easeOut,
+            padding: EdgeInsets.all(pad),
+            // 高度由外面那层定（动画值），这里只跟着走；
+            // 内容按 contentHeight 排，露不出来的部分裁掉。
+            clipBehavior: Clip.hardEdge,
+            decoration: BoxDecoration(
+              color: event.isNarration
+                  ? p.accent.withValues(alpha: hover ? 0.11 : 0.06)
+                  : (hover ? p.surface.withValues(alpha: 0.92) : p.surface),
+              border: JoShape.border(
+                selected
+                    ? p.accent
+                    : (event.isNarration
+                          ? p.accent.withValues(alpha: 0.4)
+                          : p.border),
+              ),
+              borderRadius: JoShape.br,
             ),
-            borderRadius: JoShape.br,
-          ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Row(
+            child: OverflowBox(
+              alignment: Alignment.topLeft,
+              minHeight: contentHeight - pad * 2,
+              maxHeight: contentHeight - pad * 2,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
                 children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: Text(
+                          event.who,
+                          overflow: TextOverflow.ellipsis,
+                          style: JoFonts.meta.copyWith(
+                            color: selected ? p.accent : whoColor,
+                            fontWeight: event.isNarration
+                                ? FontWeight.w400
+                                : FontWeight.w600,
+                          ),
+                        ),
+                      ),
+                      Text(
+                        event.time,
+                        style: JoFonts.meta.copyWith(
+                          color: p.secondary,
+                          fontSize: 10,
+                        ),
+                      ),
+                    ],
+                  ),
+                  SizedBox(height: compact ? 6 : JoSpace.s3),
                   Expanded(
                     child: Text(
-                      event.who,
-                      overflow: TextOverflow.ellipsis,
-                      style: JoFonts.meta.copyWith(
-                        color: selected ? p.accent : whoColor,
-                        fontWeight: event.isNarration
-                            ? FontWeight.w400
-                            : FontWeight.w600,
-                      ),
-                    ),
-                  ),
-                  Text(
-                    event.time,
-                    style: JoFonts.meta.copyWith(
-                      color: p.secondary,
-                      fontSize: 10,
+                      event.text,
+                      style: settings
+                          .bodyStyle(p.text)
+                          .copyWith(
+                            fontSize: compact
+                                ? settings.bodySize - 3
+                                : settings.bodySize,
+                          ),
+                      maxLines: compact ? 2 : null,
+                      overflow: compact ? TextOverflow.ellipsis : null,
                     ),
                   ),
                 ],
               ),
-              SizedBox(height: compact ? 6 : JoSpace.s3),
-              Expanded(
-                child: Text(
-                  event.text,
-                  style: settings
-                      .bodyStyle(p.text)
-                      .copyWith(
-                        fontSize: compact
-                            ? settings.bodySize - 3
-                            : settings.bodySize,
-                      ),
-                  maxLines: compact ? 2 : null,
-                  overflow: compact ? TextOverflow.ellipsis : null,
-                ),
-              ),
-            ],
+            ),
           ),
         );
       },
@@ -2185,9 +2376,7 @@ class _CanvasPainter extends CustomPainter {
     required this.headerH,
     required this.cardH,
     required this.rowH,
-    this.selRow = -1,
-    this.selLane,
-    this.selExtra = 0,
+    required this.extra,
     required this.gap,
     required this.maxRows,
     required this.rows,
@@ -2204,14 +2393,9 @@ class _CanvasPainter extends CustomPainter {
   final double cardH;
   final double rowH;
 
-  /// 被选中的那一行（-1 = 没有），以及它多出来的高度。
+  /// 每张正在变高 / 收回去的卡多出来的高度，键 = （列 id, 行号）。
   /// 拉高的卡片会把下面整体推下去，连线必须算进去，否则会穿在卡片中间。
-  final int selRow;
-
-  /// 拉高的是**哪一列**的卡。只有这一列在 [selRow] 上的那张卡多出 [selExtra]，
-  /// 别的列同行照旧 —— 不算这个，连线就会从别的列的卡底下方凭空开始。
-  final String? selLane;
-  final double selExtra;
+  final Map<(String, int), double> extra;
   final double gap;
   final int maxRows;
   final Map<String, List<int>> rows;
@@ -2222,15 +2406,21 @@ class _CanvasPainter extends CustomPainter {
 
   @override
   void paint(Canvas canvas, Size size) {
-    double rowTop(int i) =>
-        headerH + i * rowH + (i > selRow && selRow >= 0 ? selExtra : 0);
-    // 卡片底边。**只有被聚焦那一列**的卡在选中行上被拉高了，底边才要多加
-    // selExtra；别的列同行是正常高度。早先这里只看行号不看列，于是别的列的
-    // 连线起点被抬高了 selExtra，竖段整段悬空、跟源卡断开。
+    // 第 i 行**以上**累计让出去多少（拉高的卡把下面整体推下去）。
+    double padAbove(int i) {
+      double s = 0;
+      for (final MapEntry<(String, int), double> e in extra.entries) {
+        if (e.key.$2 < i) s += e.value;
+      }
+      return s;
+    }
+
+    double rowTop(int i) => headerH + i * rowH + padAbove(i);
+    // 卡片底边：**只有真正变高的那张**要多加它自己的增量，
+    // 别的列同行是正常高度（早先只看行号不看列，于是别的列的连线起点
+    // 被抬高，竖段整段悬空、跟源卡断开）。
     double cardBottom(String laneId, int i) =>
-        rowTop(i) +
-        cardH +
-        (i == selRow && selRow >= 0 && laneId == selLane ? selExtra : 0);
+        rowTop(i) + cardH + (extra[(laneId, i)] ?? 0);
     double colCenter(String id) => colX[id]! + colW(id) / 2;
 
     // —— 地点列底 ——
@@ -2362,11 +2552,21 @@ class _CanvasPainter extends CustomPainter {
       old.headerH != headerH ||
       old.cardH != cardH ||
       old.rowH != rowH ||
-      old.selRow != selRow ||
-      old.selLane != selLane ||
-      old.selExtra != selExtra ||
+      !_sameExtra(old.extra, extra) ||
       old.maxRows != maxRows ||
       old.totalW != totalW ||
       old.colX.toString() != colX.toString() ||
       old.rows.toString() != rows.toString();
+
+  /// 两张“多出来的高度”表内容一样吗（每帧都会新一双，不能拿引用比）。
+  static bool _sameExtra(
+    Map<(String, int), double> a,
+    Map<(String, int), double> b,
+  ) {
+    if (a.length != b.length) return false;
+    for (final MapEntry<(String, int), double> e in a.entries) {
+      if (b[e.key] != e.value) return false;
+    }
+    return true;
+  }
 }

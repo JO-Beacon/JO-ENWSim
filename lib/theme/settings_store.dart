@@ -50,6 +50,8 @@ class SettingsStore {
   static const String _kKeys = 'input.keys';
   static const String _kPrompts = 'engine.prompts';
   static const String _kFollow = 'ui.followSystem';
+  static const String _kRailW = 'layout.railW';
+  static const String _kSideW = 'layout.sideW';
 
   static Future<SettingsStore> open() async =>
       SettingsStore(await SharedPreferences.getInstance());
@@ -68,6 +70,21 @@ class SettingsStore {
     await _prefs.setBool(_kFollow, s.followSystem);
     await _prefs.setDouble(_kBodySize, s.bodySize);
     await _prefs.setBool(_kSerif, s.serifBody);
+  }
+
+  /// 两侧栏的宽度（拖动条拖出来的）。没存过就是 null，由界面用默认值。
+  ///
+  /// 存的是**人想要的宽度**：窗口变小画的时候再收一道，拉回去能恢复。
+  double? loadRailW() => _prefs.getDouble(_kRailW);
+
+  double? loadSideW() => _prefs.getDouble(_kSideW);
+
+  Future<void> saveWidths({
+    required double railW,
+    required double sideW,
+  }) async {
+    await _prefs.setDouble(_kRailW, railW);
+    await _prefs.setDouble(_kSideW, sideW);
   }
 
   /// 服务商列表。逐条解析，坏条跳过。

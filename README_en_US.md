@@ -11,7 +11,7 @@ JO-ENWSim is an emergent narrative simulator — a causal sandbox run by multipl
 
 ![Workspace](./docs/screenshot.png)
 
-The workspace above: the left rail lists worlds; the middle is the **sequence canvas** (each column is a location, each step is an event, and the lines crossing columns are "moved to another place"); the top of the right panel is the always-present **turn-flow diagram**, and below it the world itself — its setting, opening, characters, memories, and model configuration.
+The workspace above: the left rail lists worlds; the middle is the **sequence canvas** (each column is a location, each step is an event, and the lines crossing columns are "moved to another place"); the top of the right panel is the always-present **turn-flow diagram** (one line when collapsed — click to unfold the whole chart), and below it the world itself — its setting, opening, characters, memories, and model configuration.
 
 ## Status
 
@@ -53,7 +53,7 @@ The unit is **one character acting once = one turn**. Three kinds of agents shar
 
 Models can be assigned in layers, from specific to general: **a character's own step → the world default → the global default**.
 
-A turn-flow diagram sits at the top of the right panel: as a turn runs, the box of the step being executed lights up.
+A turn-flow diagram sits at the top of the right panel. Collapsed, it takes a single line and shows which step is running; click it to unfold the whole chart, where the box of the step being executed lights up during a turn.
 
 ## Build and run
 

@@ -277,6 +277,8 @@ class _JoEnwsAppState extends State<JoEnwsApp>
       home: Workspace(
         settings: _settings,
         onSettingsChanged: _update,
+        // 两侧栏拖出来的宽度存在同一个存档里，重启还在。
+        settingsStore: widget.store,
         providers: _providers,
         onProvidersChanged: _updateProviders,
         globalPlan: _globalPlan,

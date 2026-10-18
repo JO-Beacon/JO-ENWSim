@@ -1,7 +1,7 @@
-// 右栏那张“回合流程”图。**常驻**显示，推演时亮当前步。
+// 右栏那张“回合流程”图。收起时只占一行，展开时占满右栏、一眼看全。
 //
 // 画法：自己排版 + CustomPaint 画全部内容（菱形判断 / 方框动作 / 分组框 /
-// 带标签的箭头）。整张图按固定逻辑尺寸画好，再用 `FittedBox` 缩到面板宽度 ——
+// 带标签的箭头）。整张图按固定逻辑尺寸画好，再整体缩放 ——
 // 这样面板怎么拉，图都保持比例，不会错位。
 //
 // 不引任何依赖，也不用 mermaid。
@@ -30,12 +30,17 @@ FlowStep? flowStepOf(String? id) => switch (id) {
   _ => null,
 };
 
-class TurnFlow extends StatefulWidget {
+/// 展开 / 收起的高度动画时长。
+const Duration kJoFlowMs = Duration(milliseconds: 240);
+
+class TurnFlow extends StatelessWidget {
   const TurnFlow({
     super.key,
     required this.palette,
     this.active,
     this.done = const <String>{},
+    this.expanded = false,
+    required this.onToggle,
   });
 
   final JoPalette palette;
@@ -46,113 +51,129 @@ class TurnFlow extends StatefulWidget {
   /// 跑过的步骤 id。
   final Set<String> done;
 
-  @override
-  State<TurnFlow> createState() => _TurnFlowState();
-}
-
-/// 可视化区域的高度（超过就自己滚，不把右栏挤爆）。
-const double _viewportH = 340;
-
-class _TurnFlowState extends State<TurnFlow> {
-  final ScrollController _scroll = ScrollController();
-
-  @override
-  void didUpdateWidget(TurnFlow old) {
-    super.didUpdateWidget(old);
-    if (old.active != widget.active) {
-      // 换步了：把它滚到视野中间，否则跑到下面几步时看不见。
-      WidgetsBinding.instance.addPostFrameCallback((_) => _reveal());
-    }
-  }
-
-  void _reveal() {
-    if (!_scroll.hasClients) return;
-    final FlowStep? s = flowStepOf(widget.active);
-    final Rect? r = s == null ? null : rectOfStep(s);
-    if (r == null) return;
-    final double target = r.center.dy * _scale - _viewportH / 2;
-    _scroll.animateTo(
-      target.clamp(0.0, _scroll.position.maxScrollExtent),
-      duration: const Duration(milliseconds: 220),
-      curve: Curves.easeOut,
-    );
-  }
-
-  double _scale = 1;
-
-  @override
-  void dispose() {
-    _scroll.dispose();
-    super.dispose();
-  }
+  /// 展开了没有。
+  ///
+  /// 收起时**只占一行**（标题 + 当前步）；展开时按图自己的比例占应有的高度，
+  /// **不遮挡也不挤走**后面的内容 —— 后面的东西顺着往下排，由外层一起滚。
+  final bool expanded;
+  final VoidCallback onToggle;
 
   @override
   Widget build(BuildContext context) {
-    final JoPalette palette = widget.palette;
+    final JoPalette palette = this.palette;
+    final FlowStep? here = flowStepOf(active);
     return Container(
       padding: const EdgeInsets.fromLTRB(
         JoSpace.s4,
         JoSpace.s2,
-        JoSpace.s4,
         JoSpace.s3,
+        JoSpace.s2,
       ),
       decoration: BoxDecoration(
         border: Border(bottom: JoShape.side(palette.border)),
       ),
       child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
+        crossAxisAlignment: CrossAxisAlignment.stretch,
         mainAxisSize: MainAxisSize.min,
         children: <Widget>[
-          Text(
-            '回合流程',
-            style: JoFonts.meta.copyWith(
-              color: palette.secondary,
-              letterSpacing: 2,
-            ),
-          ),
-          const SizedBox(height: JoSpace.s2),
-          SizedBox(
-            height: _viewportH,
-            child: LayoutBuilder(
-              builder: (BuildContext c, BoxConstraints k) {
-                // 按面板宽度缩放，图不会错位；高了在框里滚。
-                final double s = k.maxWidth / _w;
-                _scale = s;
-                return SingleChildScrollView(
-                  controller: _scroll,
-                  child: SizedBox(
-                    width: k.maxWidth,
-                    height: _h * s,
-                    child: FittedBox(
-                      fit: BoxFit.fill,
-                      child: SizedBox(
-                        width: _w,
-                        height: _h,
-                        child: CustomPaint(
-                          painter: _FlowPainter(
-                            active: flowStepOf(widget.active),
-                            done: widget.done
-                                .map(flowStepOf)
-                                .whereType<FlowStep>()
-                                .toSet(),
-                            secondary: palette.secondary,
-                            frame: palette.border,
-                            frameFill: palette.surface,
-                            accent: palette.accent,
+          _header(palette, here),
+          // 展开 / 收起走一段高度动画：0 ↔ 整张图。
+          // 图本身不拉伸，是“拉帘子”式裁出来的（上面的先出现），
+          // 下面的内容跟着顺下去，不是一下子跳。
+          AnimatedSize(
+            duration: kJoFlowMs,
+            curve: Curves.easeOutCubic,
+            alignment: Alignment.topCenter,
+            clipBehavior: Clip.hardEdge,
+            child: expanded
+                ? Padding(
+                    padding: const EdgeInsets.only(top: JoSpace.s3),
+                    // 展开时**不遮不盖**：图按自己的比例占应有的高度，
+                    // 下面的内容顺着往下排，整个右栏一起滚。
+                    child: AspectRatio(
+                      aspectRatio: _w / _h,
+                      child: FittedBox(
+                        fit: BoxFit.fill,
+                        child: SizedBox(
+                          width: _w,
+                          height: _h,
+                          child: CustomPaint(
+                            key: const ValueKey<String>('flow-diagram'),
+                            painter: _FlowPainter(
+                              active: here,
+                              done: done
+                                  .map(flowStepOf)
+                                  .whereType<FlowStep>()
+                                  .toSet(),
+                              secondary: palette.secondary,
+                              frame: palette.border,
+                              frameFill: palette.surface,
+                              accent: palette.accent,
+                            ),
                           ),
                         ),
                       ),
                     ),
-                  ),
-                );
-              },
-            ),
+                  )
+                : const SizedBox(width: double.infinity, height: 0),
           ),
         ],
       ),
     );
   }
+
+  /// 标题那一行：左边“回合流程 · 当前：决策”，右边一个小三角。整行可点。
+  Widget _header(JoPalette p, FlowStep? here) {
+    return GestureDetector(
+      behavior: HitTestBehavior.opaque,
+      onTap: onToggle,
+      child: MouseRegion(
+        cursor: SystemMouseCursors.click,
+        child: Row(
+          children: <Widget>[
+            Text(
+              '回合流程',
+              style: JoFonts.meta.copyWith(
+                color: p.secondary,
+                letterSpacing: 2,
+              ),
+            ),
+            if (here != null) ...<Widget>[
+              const SizedBox(width: JoSpace.s3),
+              Flexible(
+                child: Text(
+                  '当前：${labelOf(here)}',
+                  overflow: TextOverflow.ellipsis,
+                  style: JoFonts.meta.copyWith(color: p.accent),
+                ),
+              ),
+            ],
+            const Spacer(),
+            Text(
+              expanded ? '收起' : '展开',
+              style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
+            ),
+          ],
+        ),
+      ),
+    );
+  }
 }
+
+/// 图上每一步的中文名（收起时那一行要用）。
+String labelOf(FlowStep s) => switch (s) {
+  FlowStep.a0 => '是否分裂序列',
+  FlowStep.split => '分裂序列',
+  FlowStep.decide => '决策',
+  FlowStep.a1 => '环境更新',
+  FlowStep.a2 => '理解事件 / 框选',
+  FlowStep.b1 => '并行感知',
+  FlowStep.a3 => '框选唯一',
+  FlowStep.b2 => '执行行为',
+  FlowStep.judge => '传统程序判断',
+  FlowStep.a4 => '是否需要合并',
+  FlowStep.merge => '和其他序列合并',
+};
 
 /// 某个步骤在图上的矩形（自动滚到它用）。
 Rect? rectOfStep(FlowStep s) {
