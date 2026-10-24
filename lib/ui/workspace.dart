@@ -2,6 +2,7 @@ import 'dart:math' as math;
 
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
+import 'package:flutter/rendering.dart';
 import 'package:flutter/scheduler.dart';
 import 'package:flutter/services.dart';
 
@@ -18,6 +19,7 @@ import '../model/pack_rows.dart';
 import '../model/provider.dart';
 import '../model/shortcuts.dart';
 import '../theme/tokens.dart';
+import '../markdown/md_view.dart';
 import 'common.dart';
 import 'card_extra.dart';
 import 'icons.dart';
@@ -52,6 +54,9 @@ class Workspace extends StatefulWidget {
     required this.onGlobalPlanChanged,
     this.servicesNote,
     this.globalPlanNote,
+    this.worldPlans = const <String, ModelPlan>{},
+    this.onWorldPlansChanged,
+    this.worldPlansNote,
     this.keys = const <String, String>{},
     this.onKeysChanged,
     required this.store,
@@ -69,6 +74,11 @@ class Workspace extends StatefulWidget {
   /// 存档读不出来时的提示语（如实说，不藏）。
   final String? servicesNote;
   final String? globalPlanNote;
+
+  /// 每个世界的模型配置（世界默认 + 逐步骤），存在存档里。
+  final Map<String, ModelPlan> worldPlans;
+  final ValueChanged<Map<String, ModelPlan>>? onWorldPlansChanged;
+  final String? worldPlansNote;
 
   /// 快捷键：动作 id → 键位字符串。全局绑定从这里读，不再写死。
   final Map<String, String> keys;
@@ -130,6 +140,31 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     widget.settingsStore?.saveWidths(railW: _railW, sideW: _sideW);
   }
 
+  @override
+  void initState() {
+    super.initState();
+    _loadPersisted();
+  }
+
+  /// 从库里把“记忆”和“每个角色自己的模型 / 选择”读进来。
+  ///
+  /// 以前这两样只活在内存里：记忆写完关掉就没了；
+  /// 角色模型和选择换个世界再回来也归零。表一直都在，就是没接线。
+  void _loadPersisted() {
+    for (final World w in _worlds) {
+      final List<MemoryBook> books = widget.store.loadMemories(w.id);
+      if (books.isNotEmpty) {
+        _memory[w.id] = <String, MemoryBook>{
+          for (final MemoryBook b in books) b.ownerId: b,
+        };
+      }
+      final ({Map<String, ModelPlan> plans, Map<String, CharChoices> choices})
+      cfg = widget.store.loadCharCfg(w.id);
+      if (cfg.plans.isNotEmpty) _charModel[w.id] = cfg.plans;
+      if (cfg.choices.isNotEmpty) _choices[w.id] = cfg.choices;
+    }
+  }
+
   /// 记忆：按世界分。每份里 key 空 = 上帝，其它 = 角色名。
   /// 现在只是孤立的数据，不接入回合流程。
   final Map<String, Map<String, MemoryBook>> _memory =
@@ -177,8 +212,22 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   String? _focused;
   int? _selected;
 
-  /// 每世界的模型配置（世界默认 + 逐步骤）。现在只在内存里。
-  final Map<String, ModelPlan> _plans = <String, ModelPlan>{};
+  /// 每世界的模型配置（世界默认 + 逐步骤）。**存盘**，重启还在。
+  ///
+  /// 以前只在内存里：选完模型一重启就没，发言框又写回“未选择”。
+  late final Map<String, ModelPlan> _plans = <String, ModelPlan>{
+    ...widget.worldPlans,
+  };
+
+  /// 改一块世界的模型配置（null = 删掉），并写盘。
+  void _putPlan(String worldId, ModelPlan? plan) {
+    if (plan == null) {
+      _plans.remove(worldId);
+    } else {
+      _plans[worldId] = plan;
+    }
+    widget.onWorldPlansChanged?.call(_plans);
+  }
 
   /// 画布上“展开某一列”的过渡。
   ///
@@ -242,6 +291,24 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
   /// 选中的那张卡要额外多高：**按正文量出来**，不钉死。
   ///
   /// 量不出（没选 / 找不到）就是 0，跟原来一样。
+  /// 选中那张卡“正文”的**实际渲染高度**（列 id + 行 → px）。
+  ///
+  /// 为什么需要它：以前正文高度是用 `TextPainter` 按**纯文字**量的，
+  /// Markdown 一渲染（列表、表格、标题）就比那高，卡不够高就会被裁。
+  /// 现在由卡里的 [_MeasureSize] 把真实高度报上来。
+  final Map<(String, int), double> _bodyH = <(String, int), double>{};
+
+  /// 卡里正文报上来的高度。变了才 setState（不然每帧都重建）。
+  void _setBodyHeight(String laneId, int row, double h) {
+    if (!mounted) return;
+    final (String, int) k = (laneId, row);
+    final double? old = _bodyH[k];
+    // 允许半像素误差：排版取整会让高度来回抖一个零头，
+    // 用相等去比就会“永远不等 → 每帧 setState → pumpAndSettle 转圈”。
+    if (old != null && (old - h).abs() < 0.5) return;
+    setState(() => _bodyH[k] = h);
+  }
+
   double get _selExtra {
     final String? laneId = _focused;
     final int? idx = _selected;
@@ -256,14 +323,19 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     // 正文以外的东西全部**实量**：内边距、顶行（谁 + 时间）、行间距、边框。
     // 不拿一个估计的数字蒙。
     const double pad = JoSpace.s4; // 选中时不是 compact，用 s4
-    final double bodyW = w;
+    final int row = _rows[laneId]?[idx] ?? -1;
+
+    // 正文高度：优先用卡里报上来的**真实渲染高度**；
+    // 还没测到（第一帧）才用纯文字的估算，免得卡一下子跳太高。
+    final double? measured = row >= 0 ? _bodyH[(laneId, row)] : null;
     final TextPainter bodyTp = TextPainter(
       text: TextSpan(
         text: lane.events[idx].text,
         style: widget.settings.bodyStyle(p.text),
       ),
       textDirection: TextDirection.ltr,
-    )..layout(maxWidth: bodyW);
+    )..layout(maxWidth: w);
+    final double bodyH = measured ?? bodyTp.height;
 
     final TextPainter rowTp = TextPainter(
       text: TextSpan(
@@ -271,10 +343,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         style: JoFonts.meta.copyWith(color: p.text),
       ),
       textDirection: TextDirection.ltr,
-    )..layout(maxWidth: bodyW);
+    )..layout(maxWidth: w);
 
-    final double total =
-        bodyTp.height + rowTp.height + JoSpace.s3 + pad * 2 + 2;
+    final double total = bodyH + rowTp.height + JoSpace.s3 + pad * 2 + 2;
     return total > kCardH ? total - kCardH : 0;
   }
 
@@ -374,6 +445,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       // 列 id 会重名（l1/l2…），旧的动画进度不能带过去。
       _laneFocus.clear();
       _extra.clear();
+      // 量过的正文高度也是按“列 + 行”记的，换世界一并清。
+      _bodyH.clear();
     });
     await _worldFade.reverse();
     if (!mounted) {
@@ -477,7 +550,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       if (r.delete) {
         _worlds.removeWhere((World w) => w.id == id);
         widget.store.deleteWorld(id);
-        _plans.remove(id);
+        _putPlan(id, null);
         _memory.remove(id);
         _choices.remove(id);
         _charModel.remove(id);
@@ -489,8 +562,12 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         return;
       }
       _plans[id] = r.plan;
+      widget.onWorldPlansChanged?.call(_plans);
       _memory[id] = r.books;
       _charModel[id] = r.charModels;
+      // 记忆、每个角色自己的模型：改了立刻进库。
+      widget.store.saveMemories(id, r.books);
+      widget.store.saveCharPlans(id, r.charModels);
       for (int i = 0; i < _worlds.length; i++) {
         final World w = _worlds[i];
         if (w.id != id) continue;
@@ -504,8 +581,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
           lanes: w.lanes,
           moves: w.moves,
         );
-        // 改完就落盘。
-        widget.store.saveWorld(_worlds[i]);
+        // 弹窗改的只是世界那一行（名字/设定/角色…），**没动步**：
+        // 所以走 saveWorldMeta。以前走 saveWorld，会把整张 step 表重写。
+        widget.store.saveWorldMeta(_worlds[i]);
       }
     });
   }
@@ -536,15 +614,31 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     return out;
   }
 
-  /// 发言框那张牌上写什么：这个世界默认用的模型。
-  /// 世界默认没设就留空，交给全局默认（全局默认在设置里）。
-  String get _worldModelLabel {
-    final ModelPick? pick = ModelPick.of(_plans[_world.id]?.defaultRef ?? '');
-    if (pick == null) return '';
+  /// 发言框上写哪个模型。
+  ///
+  /// **必须写“真正会用的那个”**：世界默认 → 全局默认。
+  /// 以前只读世界默认，于是设置里配了全局默认，这里还写着“未选择”——
+  /// 明明有模型能用，界面在骗人。
+  ({String label, bool inherited}) get _worldModelLabel {
+    final String worldKey = _plans[_world.id]?.defaultRef ?? '';
+    final String? own = _modelLabelOf(worldKey);
+    if (own != null) return (label: own, inherited: false);
+
+    final String? global = _modelLabelOf(widget.globalPlan.defaultRef);
+    if (global != null) return (label: global, inherited: true);
+
+    return (label: '', inherited: false);
+  }
+
+  /// 一个模型键 → “服务商 · 模型名”。空 / 认不出服务商就给 null。
+  String? _modelLabelOf(String key) {
+    final ModelPick? pick = ModelPick.of(key);
+    if (pick == null || pick.isEmpty) return null;
     for (final Provider pv in widget.providers) {
       if (pv.id == pick.providerId) return '${pv.name} · ${pick.modelId}';
     }
-    return pick.modelId;
+    // 服务商被删了：不装作没选，就写它名字、标一句。
+    return '${pick.modelId}（服务商已不在）';
   }
 
   /// 一个角色当前用哪个模型，以及那个模型的能力与协议形状。
@@ -604,6 +698,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       final ModelPlan plan = m[name] ?? const ModelPlan();
       m[name] = plan.withStep('B2', pick?.key ?? '');
       _charModel[_world.id] = m;
+      // 角色自己的模型：进库，重启还在。
+      widget.store.saveCharPlan(_world.id, name, m[name]!);
     });
   }
 
@@ -616,7 +712,11 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       onPickModel: _pickCharModel,
     );
     if (next == null || !mounted) return;
-    setState(() => _choices[_world.id] = next);
+    setState(() {
+      _choices[_world.id] = next;
+      // 角色选择：进库，重启还在。
+      widget.store.saveCharChoices(_world.id, next);
+    });
   }
 
   Future<void> _pickModel() async {
@@ -628,7 +728,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       worldName: _world.name,
     );
     if (next == null || !mounted) return;
-    setState(() => _plans[_world.id] = next);
+    final String id = _world.id;
+    setState(() => _putPlan(id, next));
   }
 
   /// 提交。
@@ -674,6 +775,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
             onGlobalPlanChanged: widget.onGlobalPlanChanged,
             servicesNote: widget.servicesNote,
             globalPlanNote: widget.globalPlanNote,
+            worldPlansNote: widget.worldPlansNote,
             keys: widget.keys,
             prompts: widget.prompts,
             onPromptsChanged: (Map<String, String> next) =>
@@ -1006,7 +1108,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
                       if (_world.playerName.isNotEmpty) ...<Widget>[
                         _ComposeBar(
                           palette: p,
-                          model: _worldModelLabel,
+                          model: _worldModelLabel.label,
+                          inherited: _worldModelLabel.inherited,
                           onChoices: _pickChoices,
                           onPickModel: _pickModel,
                         ),
@@ -1284,6 +1387,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
             // 扩出去的那一段也有轮廓（以前外面裁一刀，那一段没边框）。
             height: kCardH + extra,
             child: _StepCard(
+              key: ValueKey<String>('card-${lane.id}-${r[i]}'),
               palette: p,
               settings: widget.settings,
               event: lane.events[i],
@@ -1296,6 +1400,10 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
                 kCardH + extra,
               ),
               extra: extra,
+              // 只有选中的那张需要把正文真实高度报回来。
+              onBodySize: on
+                  ? (double h) => _setBodyHeight(lane.id, r[i], h)
+                  : null,
               onTap: () => _focusLane(lane.id, index: i),
             ),
           ),
@@ -2037,6 +2145,7 @@ class _EmptyWorld extends StatelessWidget {
 
 class _StepCard extends StatelessWidget {
   const _StepCard({
+    super.key,
     required this.palette,
     required this.settings,
     required this.event,
@@ -2045,6 +2154,7 @@ class _StepCard extends StatelessWidget {
     required this.contentHeight,
     required this.extra,
     required this.onTap,
+    this.onBodySize,
   });
 
   final JoPalette palette;
@@ -2052,6 +2162,9 @@ class _StepCard extends StatelessWidget {
   final TurnStep event;
   final bool focused;
   final bool selected;
+
+  /// 卡里正文的**真实渲染高度**报回去（只有选中的那张要）。
+  final ValueChanged<double>? onBodySize;
 
   /// 里面内容按多高排版（展开后应有的高度）。
   final double contentHeight;
@@ -2124,17 +2237,36 @@ class _StepCard extends StatelessWidget {
                   ),
                   SizedBox(height: compact ? 6 : JoSpace.s3),
                   Expanded(
-                    child: Text(
-                      event.text,
-                      style: settings
-                          .bodyStyle(p.text)
-                          .copyWith(
-                            fontSize: compact
-                                ? settings.bodySize - 3
-                                : settings.bodySize,
+                    // 正文按 Markdown 画：小卡片只要两行摘要，
+                    // 展开的那张才排版（标题/列表/引用/代码/表格/图片）。
+                    //
+                    // 选中那张会把正文的**真实高度**报回去（`_MeasureSize`），
+                    // 否则卡高按纯文字算，长列表/表格会被裁掉一截。
+                    // 外面这层裁剪只是**保底**：报上来之前的一帧、或者报得慢一拍，
+                    // 也不会把下面的卡顶开。
+                    child: ClipRect(
+                      child: OverflowBox(
+                        alignment: Alignment.topLeft,
+                        // **minHeight 必须显式给 0**：不写默认沿用父级的 minHeight
+                        // （= 卡片当前给的高度），子控件会被撑到“至少那么高”，
+                        // 于是“卡变高 → 量到更高 → 卡再变高”无限循环。
+                        minHeight: 0,
+                        maxHeight: double.infinity,
+                        child: _maybeMeasure(
+                          onBodySize,
+                          JoMarkdown(
+                            data: event.text,
+                            compact: compact,
+                            style: settings
+                                .bodyStyle(p.text)
+                                .copyWith(
+                                  fontSize: compact
+                                      ? settings.bodySize - 3
+                                      : settings.bodySize,
+                                ),
                           ),
-                      maxLines: compact ? 2 : null,
-                      overflow: compact ? TextOverflow.ellipsis : null,
+                        ),
+                      ),
                     ),
                   ),
                 ],
@@ -2144,6 +2276,48 @@ class _StepCard extends StatelessWidget {
         );
       },
     );
+  }
+}
+
+// ————————————————————————————— 量尺寸
+
+/// 包一层就是在布局之后把**子控件的真实尺寸**报出来。
+///
+/// 用途：卡片里的 Markdown 正文到底多高，只有真排一遍才知道；
+/// 文字量出来的数在列表/表格面前是不准的。
+Widget _maybeMeasure(ValueChanged<double>? onSize, Widget child) =>
+    onSize == null ? child : _MeasureSize(onSize: onSize, child: child);
+
+class _MeasureSize extends SingleChildRenderObjectWidget {
+  const _MeasureSize({required this.onSize, required Widget super.child});
+
+  final ValueChanged<double> onSize;
+
+  @override
+  _RenderMeasureSize createRenderObject(BuildContext context) =>
+      _RenderMeasureSize(onSize);
+
+  @override
+  void updateRenderObject(BuildContext context, _RenderMeasureSize render) {
+    render.onSize = onSize;
+  }
+}
+
+class _RenderMeasureSize extends RenderProxyBox {
+  _RenderMeasureSize(this.onSize);
+
+  ValueChanged<double> onSize;
+  double? _last;
+
+  @override
+  void performLayout() {
+    super.performLayout();
+    final double h = size.height;
+    if (_last == h) return;
+    _last = h;
+    // 不能在 layout 里 setState：排完这一帧再报。
+    final ValueChanged<double> cb = onSize;
+    WidgetsBinding.instance.addPostFrameCallback((_) => cb(h));
   }
 }
 
@@ -2157,12 +2331,20 @@ class _ComposeBar extends StatelessWidget {
   const _ComposeBar({
     required this.palette,
     required this.model,
+    required this.inherited,
     required this.onPickModel,
     required this.onChoices,
   });
 
   final JoPalette palette;
-  final String? model;
+
+  /// 真正会用的那个模型（“服务商 · 模型”）。空 = 真没有。
+  final String model;
+
+  /// true = 这个世界没单独设，跟的是全局默认。
+  final bool inherited;
+
+  /// 点模型那块：开模型配置弹窗。
   final VoidCallback onPickModel;
 
   /// 打开“选择”面板（跟着角色走的那一套）。
@@ -2171,46 +2353,153 @@ class _ComposeBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final JoPalette p = palette;
+    final bool none = model.trim().isEmpty;
     return Container(
       padding: const EdgeInsets.symmetric(
         horizontal: JoSpace.s4,
         vertical: JoSpace.s1 + 2,
       ),
       decoration: BoxDecoration(border: Border(top: JoShape.side(p.border))),
-      // 窄窗口下这一条会塞不下（实测 260px 就溢出）。
-      // 横向可滚 —— 比默默裁掉强。
-      // （下面 Row 的缩进没跟着改，dart format 会收拾。）
-      child: SingleChildScrollView(
-        scrollDirection: Axis.horizontal,
-        child: Row(
-          children: <Widget>[
-            JoButton(
-              text: '模型 · ${(model ?? '').trim().isEmpty ? '未选择' : model}',
-              onTap: onPickModel,
-              color: p.accent,
+      // 一条： 模型 [DeepSeek · deepseek-chat ▾]  选择 [▾] …… 工具还没接  [4 个图标]
+      //
+      // 以前是“两个按钮 + 一段说明”挤在一个横向滚动里，局位不够就成一均；
+      // 而“（还没接入）”夹在中间，看着像“选择”没接。
+      //
+      // 现在：右边四个工具**固定贴右**；左边那一簇（模型 / 选择 / 说明）
+      // 占剩下的宽度，实在放不下就自己懒滚——不会把整条撑溢出。
+      child: Row(
+        children: <Widget>[
+          Expanded(
+            child: SingleChildScrollView(
+              scrollDirection: Axis.horizontal,
+              child: Row(
+                children: <Widget>[
+                  // 模型名可能很长（服务商 · 模型 id）：给个上限，超了省略。
+                  ConstrainedBox(
+                    constraints: const BoxConstraints(maxWidth: 260),
+                    child: _BarChip(
+                      palette: p,
+                      label: '模型',
+                      value: none ? '未选择' : model,
+                      dim: none,
+                      badge: inherited ? '全局' : null,
+                      onTap: onPickModel,
+                    ),
+                  ),
+                  const SizedBox(width: JoSpace.s2),
+                  _BarChip(
+                    palette: p,
+                    label: '选择',
+                    value: '',
+                    onTap: onChoices,
+                  ),
+                  const SizedBox(width: JoSpace.s3),
+                  Text(
+                    // 这四家工具确实还没接，就直说；不靠“悬停才知道”。
+                    '工具还没接',
+                    style: JoFonts.meta.copyWith(
+                      color: p.secondary,
+                      fontSize: 10,
+                    ),
+                  ),
+                ],
+              ),
             ),
-            const SizedBox(width: JoSpace.s2),
-            JoButton(text: '选择', onTap: onChoices, color: p.accent),
-            const SizedBox(width: JoSpace.s2),
-            Text(
-              '（还没接入）',
-              style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
-            ),
-            // 原先是 Spacer —— 横向滚动里没有约束，Spacer 会炸。
-            const SizedBox(width: JoSpace.s5),
-            // 这四个从文字换成了图标。悬停浮底色、图标亮一档，不描边 ——
-            // 跟界面里其它工具栏一个做法。
-            for (final ({IconData icon, String tip}) act
-                in const <({IconData icon, String tip})>[
-                  (icon: JoIcons.image, tip: '插入媒体'),
-                  (icon: JoIcons.file, tip: '插入文件'),
-                  (icon: JoIcons.camera, tip: '拍照'),
-                  (icon: JoIcons.global, tip: '联网搜索'),
-                ])
-              JoIconAction(icon: act.icon, tip: act.tip, onTap: () {}),
-          ],
-        ),
+          ),
+          const SizedBox(width: JoSpace.s3),
+          for (final ({IconData icon, String tip}) act
+              in const <({IconData icon, String tip})>[
+                (icon: JoIcons.image, tip: '插入媒体（还没接）'),
+                (icon: JoIcons.file, tip: '插入文件（还没接）'),
+                (icon: JoIcons.camera, tip: '拍照（还没接）'),
+                (icon: JoIcons.global, tip: '联网搜索（还没接）'),
+              ])
+            JoIconAction(icon: act.icon, tip: act.tip, onTap: () {}),
+        ],
       ),
+    );
+  }
+}
+
+/// 发言框上方那种小格子：左边一个小标签，右边一个值，右端一个 ▾。
+///
+/// 只是为了让“模型 / 选择”两件事看起来是**同一类东西**，
+/// 而不是两个颜色不一的文字按钮。
+class _BarChip extends StatelessWidget {
+  const _BarChip({
+    required this.palette,
+    required this.label,
+    required this.value,
+    required this.onTap,
+    this.dim = false,
+    this.badge,
+  });
+
+  final JoPalette palette;
+  final String label;
+  final String value;
+  final VoidCallback onTap;
+
+  /// 值用次要色（比如“未选择”）。
+  final bool dim;
+
+  /// 值前面一个小标记（比如“全局”）。
+  final String? badge;
+
+  @override
+  Widget build(BuildContext context) {
+    final JoPalette p = palette;
+    final TextStyle meta = JoFonts.meta.copyWith(fontSize: 10);
+    return JoTap(
+      onTap: onTap,
+      opaque: false,
+      builder: (BuildContext c, bool hover, bool down) {
+        final bool lit = hover || down;
+        return AnimatedContainer(
+          duration: kJoTapMs,
+          curve: Curves.easeOut,
+          padding: const EdgeInsets.symmetric(
+            horizontal: JoSpace.s2,
+            vertical: 3,
+          ),
+          decoration: BoxDecoration(
+            color: lit ? p.surface : Colors.transparent,
+            border: JoShape.border(lit ? p.accent : p.border),
+            borderRadius: JoShape.br,
+          ),
+          child: Row(
+            mainAxisSize: MainAxisSize.min,
+            children: <Widget>[
+              Text(label, style: meta.copyWith(color: p.secondary)),
+              if (value.isNotEmpty) ...<Widget>[
+                const SizedBox(width: JoSpace.s2),
+                if (badge != null) ...<Widget>[
+                  Text(
+                    badge!,
+                    style: meta.copyWith(color: p.accent, fontSize: 9),
+                  ),
+                  const SizedBox(width: JoSpace.s1),
+                ],
+                Flexible(
+                  child: Text(
+                    value,
+                    overflow: TextOverflow.ellipsis,
+                    style: meta.copyWith(color: dim ? p.secondary : p.text),
+                  ),
+                ),
+              ],
+              const SizedBox(width: JoSpace.s1),
+              Text(
+                '▾',
+                style: meta.copyWith(
+                  color: lit ? p.accent : p.secondary,
+                  fontSize: 9,
+                ),
+              ),
+            ],
+          ),
+        );
+      },
     );
   }
 }

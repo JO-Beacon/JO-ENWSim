@@ -47,6 +47,7 @@ class SettingsStore {
   static const String _kSerif = 'narrative.serifBody';
   static const String _kProviders = 'provider.list';
   static const String _kGlobalPlan = 'model.global';
+  static const String _kWorldPlans = 'model.worlds';
   static const String _kKeys = 'input.keys';
   static const String _kPrompts = 'engine.prompts';
   static const String _kFollow = 'ui.followSystem';
@@ -207,6 +208,57 @@ class SettingsStore {
 
   Future<void> saveGlobalPlan(ModelPlan plan) async {
     await _prefs.setString(_kGlobalPlan, jsonEncode(plan.toJson()));
+  }
+
+  /// 每个世界的模型配置（世界默认 + 逐步骤）。逐条解析，坏条跳过。
+  ///
+  /// 不存这里的话，选完模型一重启就没了 —— 发言框又会写回“未选择”。
+  LoadResult<Map<String, ModelPlan>> loadWorldPlans() {
+    const LoadResult<Map<String, ModelPlan>> empty =
+        LoadResult<Map<String, ModelPlan>>(value: <String, ModelPlan>{});
+    final String? raw = _prefs.getString(_kWorldPlans);
+    if (raw == null || raw.isEmpty) return empty;
+    Object? j;
+    try {
+      j = jsonDecode(raw);
+    } catch (_) {
+      return const LoadResult<Map<String, ModelPlan>>(
+        value: <String, ModelPlan>{},
+        broken: true,
+      );
+    }
+    if (j is! Map) {
+      return const LoadResult<Map<String, ModelPlan>>(
+        value: <String, ModelPlan>{},
+        broken: true,
+      );
+    }
+    final Map<String, ModelPlan> out = <String, ModelPlan>{};
+    int bad = 0;
+    for (final MapEntry<Object?, Object?> e in j.entries) {
+      if (e.value is! Map) {
+        bad++;
+        continue;
+      }
+      try {
+        out['${e.key}'] = ModelPlan.fromJson(
+          (e.value! as Map).cast<String, Object?>(),
+        );
+      } catch (_) {
+        bad++;
+      }
+    }
+    return LoadResult<Map<String, ModelPlan>>(value: out, unreadable: bad);
+  }
+
+  Future<void> saveWorldPlans(Map<String, ModelPlan> plans) async {
+    await _prefs.setString(
+      _kWorldPlans,
+      jsonEncode(<String, Object?>{
+        for (final MapEntry<String, ModelPlan> e in plans.entries)
+          e.key: e.value.toJson(),
+      }),
+    );
   }
 
   Future<void> saveProviders(List<Provider> list) async {

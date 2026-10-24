@@ -615,7 +615,43 @@ class _JoTextFieldState extends State<JoTextField> {
   FocusNode get _focus => widget.focusNode ?? (_ownFocus ??= FocusNode());
 
   @override
+  void initState() {
+    super.initState();
+    widget.controller.addListener(_sanitize);
+    // 先处理一遍：外面可能已经把带 \r 的字塞进来了。
+    WidgetsBinding.instance.addPostFrameCallback((_) => _sanitize());
+  }
+
+  /// 把 `\r` 从输入框里清掉。
+  ///
+  /// 从网页 / 聊天窗口复制多行文字过来时，换行往往是 **CRLF**；
+  /// `\r` 到我们这儿就变成一个“豆腐块”（☒），存进库以后还会带乱
+  /// Markdown 的解析。这里在**入口**就统一成 LF，而不是到处去兼容。
+  void _sanitize() {
+    if (!mounted) return;
+    final String t = widget.controller.text;
+    if (!t.contains('\r')) return;
+
+    final int sel = widget.controller.selection.baseOffset;
+    // 光标前删掉了几个字符，光标就往前挪几位。
+    final int before = sel < 0 ? 0 : sel;
+    final int removedBefore = '\r'
+        .allMatches(t.substring(0, before.clamp(0, t.length)))
+        .length;
+    final String cleaned = t.replaceAll('\r\n', '\n').replaceAll('\r', '\n');
+    final int caret = (sel - removedBefore).clamp(0, cleaned.length);
+    widget.controller.value = TextEditingValue(
+      text: cleaned,
+      selection: sel < 0
+          ? const TextSelection.collapsed(offset: 0)
+          : TextSelection.collapsed(offset: caret),
+      composing: TextRange.empty,
+    );
+  }
+
+  @override
   void dispose() {
+    widget.controller.removeListener(_sanitize);
     _ownFocus?.dispose();
     super.dispose();
   }

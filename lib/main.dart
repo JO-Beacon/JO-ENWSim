@@ -46,6 +46,13 @@ void _registerBundledLicenses() {
     );
     yield LicenseEntryWithLineBreaks(<String>['Noto Serif SC'], text);
   });
+  LicenseRegistry.addLicense(() async* {
+    // 代码用的等宽字体（跟思源黑体同一家）。
+    final String text = await rootBundle.loadString(
+      'assets/licenses/NotoSansMono-OFL-1.1.txt',
+    );
+    yield LicenseEntryWithLineBreaks(<String>['Noto Sans Mono'], text);
+  });
 }
 
 Future<void> main() async {
@@ -55,6 +62,8 @@ Future<void> main() async {
   final SettingsStore store = await SettingsStore.open();
   final LoadResult<List<Provider>> providers = store.loadProviders();
   final LoadResult<ModelPlan> plan = store.loadGlobalPlan();
+  // 每个世界的模型配置（世界默认 / 逐步骤）。
+  final LoadResult<Map<String, ModelPlan>> worldPlans = store.loadWorldPlans();
   // 世界和回合在 SQLite 里。第一次建库时自带了几个世界。
   final WorldStore worldStore = await WorldStore.open();
   final WorldsLoad worlds = worldStore.loadWorlds();
@@ -70,6 +79,8 @@ Future<void> main() async {
       initialGlobalPlan: plan.value,
       initialPrompts: store.loadPrompts(),
       globalPlanNote: loadNoteOf(plan, '模型默认'),
+      initialWorldPlans: worldPlans.value,
+      worldPlansNote: loadNoteOf(worldPlans, '世界模型'),
     ),
   );
 }
@@ -87,6 +98,8 @@ class JoEnwsApp extends StatefulWidget {
     this.servicesNote,
     this.initialGlobalPlan = const ModelPlan(),
     this.globalPlanNote,
+    this.initialWorldPlans = const <String, ModelPlan>{},
+    this.worldPlansNote,
   });
 
   final SettingsStore store;
@@ -97,6 +110,12 @@ class JoEnwsApp extends StatefulWidget {
   final String? servicesNote;
 
   final ModelPlan initialGlobalPlan;
+
+  /// 每个世界的模型配置（世界默认 + 逐步骤），存盘。
+  final Map<String, ModelPlan> initialWorldPlans;
+
+  /// 世界模型配置读不出来时的一句话。
+  final String? worldPlansNote;
 
   /// 设置 → 引擎 里那几步的提示词（缺的已用默认补上）。
   final Map<String, String> initialPrompts;
@@ -124,6 +143,11 @@ class _JoEnwsAppState extends State<JoEnwsApp>
 
   /// 全局模型默认（设置 → 引擎），存盘。
   late ModelPlan _globalPlan = widget.initialGlobalPlan;
+
+  /// 每个世界的模型配置，存盘（改了立刻写）。
+  late Map<String, ModelPlan> _worldPlans = <String, ModelPlan>{
+    ...widget.initialWorldPlans,
+  };
 
   /// 快捷键：动作 id → 键位字符串。
   late Map<String, String> _keys = widget.store.loadKeys();
@@ -227,6 +251,30 @@ class _JoEnwsAppState extends State<JoEnwsApp>
     widget.store.saveProviders(next);
   }
 
+  /// 主题：字体、底色，加上**那层装饰下划线**。
+  ///
+  /// 为什么要在这里也给一份：Material 的子树（弹窗、菜单那些）不吃
+  /// `builder` 里的 `DefaultTextStyle` —— 它们吃 `textTheme`。
+  /// 只给一边的话，弹窗里的字会突然没线，跟主界面不同一套。
+  ThemeData _themeFor(JoPalette p) {
+    final ThemeData base = ThemeData(
+      useMaterial3: false,
+      fontFamily: JoFonts.sans,
+      scaffoldBackgroundColor: p.bg,
+      colorScheme: ColorScheme.fromSeed(
+        seedColor: p.accent,
+        brightness: p.isDark ? Brightness.dark : Brightness.light,
+      ),
+    );
+    return base.copyWith(
+      textTheme: base.textTheme.apply(
+        decoration: TextDecoration.underline,
+        decorationColor: JoFonts.decorationColor(p),
+        decorationStyle: TextDecorationStyle.solid,
+      ),
+    );
+  }
+
   @override
   Widget build(BuildContext context) {
     // 给界面的那套，直接用动画当前的位置算——过渡期间也是平滑的。
@@ -245,15 +293,7 @@ class _JoEnwsAppState extends State<JoEnwsApp>
         DefaultMaterialLocalizations.delegate,
         DefaultWidgetsLocalizations.delegate,
       ],
-      theme: ThemeData(
-        useMaterial3: false,
-        fontFamily: JoFonts.sans,
-        scaffoldBackgroundColor: palette.bg,
-        colorScheme: ColorScheme.fromSeed(
-          seedColor: palette.accent,
-          brightness: _effectiveDark ? Brightness.dark : Brightness.light,
-        ),
-      ),
+      theme: _themeFor(palette),
       builder: (BuildContext context, Widget? child) {
         // JoTheme 必须在 Navigator 之上，弹窗（Overlay）才取得到。
         // 用 AnimatedBuilder 只包 JoTheme：Navigator 作为 child 传进去，
@@ -262,14 +302,24 @@ class _JoEnwsAppState extends State<JoEnwsApp>
           animation: _themeAnim,
           child: child ?? const SizedBox.shrink(),
           builder: (BuildContext context, Widget? inner) {
+            final JoPalette p = JoPalette.lerp(
+              JoPalette.light,
+              JoPalette.dark,
+              _themeAnim.value,
+            );
             return JoTheme(
               settings: _settings,
-              palette: JoPalette.lerp(
-                JoPalette.light,
-                JoPalette.dark,
-                _themeAnim.value,
+              palette: p,
+              // 根上那层默认文字样式：字体、颜色、**装饰线**都在这里定。
+              // 以前没定，拿到的是 MaterialApp 的 _errorTextStyle：
+              // 红字、等宽、黄色双下划线（它用来逼你包 Material）。
+              child: DefaultTextStyle(
+                style: TextStyle(
+                  fontFamily: JoFonts.sans,
+                  color: p.text,
+                ).merge(JoFonts.decorationOn(p)),
+                child: inner ?? const SizedBox.shrink(),
               ),
-              child: inner ?? const SizedBox.shrink(),
             );
           },
         );
@@ -300,6 +350,13 @@ class _JoEnwsAppState extends State<JoEnwsApp>
         onGlobalPlanChanged: (ModelPlan next) {
           setState(() => _globalPlan = next);
           widget.store.saveGlobalPlan(next);
+        },
+        // 世界模型配置：改了就存，重启还在。
+        worldPlans: _worldPlans,
+        worldPlansNote: widget.worldPlansNote,
+        onWorldPlansChanged: (Map<String, ModelPlan> next) {
+          setState(() => _worldPlans = <String, ModelPlan>{...next});
+          widget.store.saveWorldPlans(next);
         },
       ),
     );

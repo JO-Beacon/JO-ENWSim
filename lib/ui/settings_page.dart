@@ -24,6 +24,7 @@ class SettingsPage extends StatefulWidget {
     required this.onGlobalPlanChanged,
     this.servicesNote,
     this.globalPlanNote,
+    this.worldPlansNote,
     this.prompts = const <String, String>{},
     this.onPromptsChanged,
     required this.keys,
@@ -41,6 +42,7 @@ class SettingsPage extends StatefulWidget {
   /// 存档读不出来时的提示语（如实说，不藏）。
   final String? servicesNote;
   final String? globalPlanNote;
+  final String? worldPlansNote;
 
   /// 快捷键：动作 id → 键位字符串。
   final Map<String, String> keys;
@@ -575,6 +577,13 @@ class _SettingsPageState extends State<SettingsPage> {
             const SizedBox(height: JoSpace.s3),
             Text(
               widget.globalPlanNote!,
+              style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+            ),
+          ],
+          if (widget.worldPlansNote != null) ...<Widget>[
+            const SizedBox(height: JoSpace.s3),
+            Text(
+              widget.worldPlansNote!,
               style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
             ),
           ],

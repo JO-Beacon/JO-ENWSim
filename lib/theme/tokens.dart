@@ -66,20 +66,24 @@ class JoPalette {
     text: Color(0xFF1C1B19),
     secondary: Color(0xFF6E6A62),
     icon: Color(0xFF6E6A62),
-    accent: Color(0xFF9A7B4F),
+    // 强调色：跟暗色同一色族（蓝），只是压深一档——
+    // 以前是金褐 #9A7B4F，在米色底上发绿，跟暗色下的蓝根本不是一回事。
+    accent: Color(0xFF4A6B8A),
     isDark: false,
   );
 }
 
 /// 字体族。
 ///
-/// 只有两个：思源黑体（Noto Sans SC）与思源宋体（Noto Serif SC）。
+/// 三个：思源黑体（Noto Sans SC）、思源宋体（Noto Serif SC）、
+/// 等宽（Noto Sans Mono，只给代码用）。
 /// **不许再写 'monospace' 这种泛称**：它不是字体名，Windows 上找不到这个
 /// 字体族，引擎就落回自带的 Roboto（就是那股“Material 味”），
 /// 而中文又落回系统字体，于是同一行里两种字。
 class JoFonts {
   static const String sans = 'NotoSansSC';
   static const String serif = 'NotoSerifSC';
+  static const String mono = 'NotoSansMono';
 
   /// 数字等宽。以前靠等宽字体把编号那列对齐；换成思源后用这个特性，
   /// 数字宽度一致、列不会跳。字体不支持就忽略。
@@ -90,11 +94,17 @@ class JoFonts {
   /// 界面 / 标题（黑体）
   static const TextStyle ui = TextStyle(fontFamily: sans);
 
-  /// 叙事正文（默认宋体；字号 / 字体由设置决定）
+  /// 叙事正文（默认宋体；字号 / 字体由设置决定）。
+  ///
+  /// **正文不要那条装饰下划线**：它不是“界面装饰”，是给人读的文章。
+  /// 而且以后正文要接 markdown 渲染——标题、列表、引用、代码块
+  /// 都会自己带样式，底下再挂一条灰线会很乱。
+  /// 这里显式写 none（不是留空）：留空就会把环境里的下划线 merge 进来。
   static const TextStyle body = TextStyle(
     fontFamily: serif,
     height: 1.75,
     fontSize: 16,
+    decoration: TextDecoration.none,
   );
 
   /// 元数据 / 标签（小一号的黑体 + 数字等宽）
@@ -104,6 +114,36 @@ class JoFonts {
     height: 1.4,
     fontSize: 12,
     letterSpacing: 0.4,
+  );
+
+  /// 代码（行内代码 / 代码块）。
+  ///
+  /// 真等宽字体；中文找不到字形时落回思源黑体（同一个设计家族，接缝最小）。
+  static const TextStyle code = TextStyle(
+    fontFamily: mono,
+    fontFamilyFallback: <String>[sans],
+    fontFeatures: tabular,
+    height: 1.5,
+  );
+
+  /// 全局那层“装饰下划线”的**颜色**：淡灰，随明暗走。
+  ///
+  /// 本来根本不该有这条线：是 MaterialApp 拿 `_errorTextStyle`
+  /// （红字、等宽、**淡黄双下划线**）当根默认样式，逼你把字包进 Material；
+  /// 而 `Text` 会把环境样式 merge 进来 —— 于是每条没写 decoration 的字
+  /// 都白赚了一条黄色双线。
+  ///
+  /// 既然设计上就要这条“下划线当装饰”，那就自己定一个安静的灰：
+  /// 暗色给得比背景亮一点（看得见但不抢），亮色给得比背景深一点。
+  static Color decorationColor(JoPalette p) =>
+      p.secondary.withValues(alpha: p.isDark ? 0.45 : 0.32);
+
+  /// 全局装饰线的样式：单线、1px、细灰。
+  static TextStyle decorationOn(JoPalette p) => TextStyle(
+    decoration: TextDecoration.underline,
+    decorationColor: decorationColor(p),
+    decorationStyle: TextDecorationStyle.solid,
+    decorationThickness: 1,
   );
 }
 

@@ -6,22 +6,22 @@
 // 而中文又落到系统字体 —— 同一行里两种字，看着就像“混进了 Material 字体”。
 
 import 'dart:io';
-import 'dart:ui' show FontFeature;
 
 import 'package:flutter/painting.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:joenws/theme/tokens.dart';
 
 void main() {
-  test('每一套文字样式都用思源，不用泛称字体', () {
+  test('每一套文字样式都用我们捆的字体，不用泛称', () {
     final Map<String, TextStyle> styles = <String, TextStyle>{
       'ui': JoFonts.ui,
       'body': JoFonts.body,
       'meta': JoFonts.meta,
+      'code': JoFonts.code,
     };
     for (final MapEntry<String, TextStyle> e in styles.entries) {
       expect(
-        <String>{JoFonts.sans, JoFonts.serif},
+        <String>{JoFonts.sans, JoFonts.serif, JoFonts.mono},
         contains(e.value.fontFamily),
         reason: '${e.key} 的字体是 ${e.value.fontFamily}',
       );
@@ -47,6 +47,11 @@ void main() {
       JoFonts.meta.fontFeatures,
       contains(const FontFeature.tabularFigures()),
     );
+  });
+
+  test('代码用真等宽字体，中文落回思源黑体', () {
+    expect(JoFonts.code.fontFamily, JoFonts.mono);
+    expect(JoFonts.code.fontFamilyFallback, contains(JoFonts.sans));
   });
 
   test('代码里不许再出现 fontFamily 写泛称', () {

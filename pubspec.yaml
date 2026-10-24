@@ -9,8 +9,11 @@ environment:
 dependencies:
   flutter:
     sdk: flutter
-  flutter_markdown_plus: ^1.0.7
-  markdown: ^7.3.0
+  # Markdown 渲染：整个交给 flutter_markdown_plus（它自己用官方 markdown 解析）。
+  # 样式全部通过 MarkdownStyleSheet 指定，不靠 Material 主题。BSD-3。
+  flutter_markdown_plus: ^1.0.12
+  # 小卡片的两行摘要要拿纯文字，自己也用一下解析器。
+  markdown: ^7.3.1
   url_launcher: ^6.3.2
   package_info_plus: ^9.0.0
   shared_preferences: ^2.3.0
@@ -23,10 +26,13 @@ dev_dependencies:
   flutter_lints: ^6.0.0
 
 flutter:
-  uses-material-design: true
+  # 不用 Material 图标（界面图标全走自己的 RemixIcon），
+  # 开着它等于白带 1.6 MB 的 MaterialIcons 字体。
+  uses-material-design: false
   assets:
     - assets/licenses/SourceHanSans-OFL-1.1.txt
     - assets/licenses/RemixIcon-License-1.0.txt
+    - assets/licenses/NotoSansMono-OFL-1.1.txt
     - LICENSE
     - NOTICE
   fonts:
@@ -47,3 +53,11 @@ flutter:
     - family: NotoSerifSC
       fonts:
         - asset: assets/fonts/NotoSerifSC-VF.ttf
+    # 代码字体：跟思源黑体同一家的等宽字，代码里出现中文时无缝。
+    # 许可：SIL OFL 1.1（全文见 assets/licenses/NotoSansMono-OFL-1.1.txt）
+    - family: NotoSansMono
+      fonts:
+        - asset: assets/fonts/NotoSansMono-VF.ttf
+          weight: 400
+        - asset: assets/fonts/NotoSansMono-VF.ttf
+          weight: 700

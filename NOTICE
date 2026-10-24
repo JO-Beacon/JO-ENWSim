@@ -10,6 +10,9 @@ This product includes software developed by third parties:
 - Noto Serif SC (思源宋体) — SIL Open Font License 1.1
   assets/fonts/NotoSerifSC-VF.ttf（可变字体）
   (两种字体的 SIL OFL 1.1 全文见 assets/licenses/SourceHanSans-OFL-1.1.txt)
+- Noto Sans Mono (https://github.com/notofonts/latin-greek-cyrillic) — SIL Open Font License 1.1
+  assets/fonts/NotoSansMono-VF.ttf（可变字体，只给代码用）
+  (许可全文见 assets/licenses/NotoSansMono-OFL-1.1.txt)
 - Remix Icon (https://remixicon.com) — Remix Icon License v1.0
   assets/fonts/remixicon.ttf（图标字体）
   常量表在 lib/ui/icons.dart（我们自己的，码点取自官方 fonts/remixicon.css）

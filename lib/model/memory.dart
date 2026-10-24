@@ -128,7 +128,13 @@ class MemoryBook {
 }
 
 /// 新记忆的 id。
-String newMemoryId() => 'm${DateTime.now().microsecondsSinceEpoch}';
+///
+/// **不能只用微秒时间戳**：连着两条是同一微秒时就会撞 id，
+/// 而库里 (world, owner, id) 是主键——第二条直接 UNIQUE 报错。
+/// 加一个进程内递增号就彻底不会撞。
+int _memorySeq = 0;
+String newMemoryId() =>
+    'm${DateTime.now().microsecondsSinceEpoch}-${_memorySeq++}';
 
 /// 新条目（用现在的时间）。
 MemoryEntry newMemoryEntry({
