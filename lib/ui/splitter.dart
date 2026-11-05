@@ -112,16 +112,25 @@ class _JoSplitterState extends State<JoSplitter> {
         onHorizontalDragEnd: (_) => _end(),
         onHorizontalDragCancel: _end,
         onDoubleTap: () => _apply(widget.defaultWidth),
-        child: SizedBox(
-          width: kJoSplitterHit,
-          height: double.infinity,
-          child: Center(
+        child: DecoratedBox(
+          decoration: BoxDecoration(
+            gradient: LinearGradient(
+              colors: widget.growsRight
+                  ? <Color>[p.surface, p.bg]
+                  : <Color>[p.bg, p.surface],
+            ),
+          ),
+          child: SizedBox(
+            width: kJoSplitterHit,
+            height: double.infinity,
+            child: Center(
             // 平时就是一条分隔线；hover / 按住时变粗变亮，告诉人“这儿能拖”。
-            child: AnimatedContainer(
-              duration: kJoTapMs,
-              curve: Curves.easeOut,
-              width: lit ? 2 : 1,
-              color: lit ? p.accent : p.border,
+              child: AnimatedContainer(
+                duration: kJoTapMs,
+                curve: Curves.easeOut,
+                width: lit ? 2 : 1,
+                color: lit ? p.accent : p.border,
+              ),
             ),
           ),
         ),
