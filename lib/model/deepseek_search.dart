@@ -4,13 +4,14 @@
 //   POST https://api.deepseek.com/v1/tools/search
 //   POST https://api.deepseek.com/v1/tools/fetch
 // 鉴权：`Authorization: Bearer <api key>`，JSON body。
-// 计费：按**成功次数**算，每个端点 $0.75 / 1000 次。
 //
 // 只用这两个端点，不碰 chat/completions —— 那套在 `llm_client.dart` 里。
 
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+
+import 'network.dart';
 
 import 'search_types.dart';
 
@@ -47,7 +48,7 @@ class DeepSeekSearch {
     };
     final http.Response r;
     try {
-      r = await (client ?? http.Client())
+      r = await (client ?? NetworkRuntime.newClient())
           .post(
             _uri('/v1/tools/search'),
             headers: _headers(apiKey),
@@ -80,7 +81,7 @@ class DeepSeekSearch {
     if (u.isEmpty) return const FetchOutcome(ok: false, message: '地址是空的');
     final http.Response r;
     try {
-      r = await (client ?? http.Client())
+      r = await (client ?? NetworkRuntime.newClient())
           .post(
             _uri('/v1/tools/fetch'),
             headers: _headers(apiKey),

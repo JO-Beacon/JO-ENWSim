@@ -17,6 +17,21 @@ This product includes software developed by third parties:
   assets/fonts/remixicon.ttf（图标字体）
   常量表在 lib/ui/icons.dart（我们自己的，码点取自官方 fonts/remixicon.css）
   (许可全文见 assets/licenses/RemixIcon-License-1.0.txt)
+- file_selector (https://pub.dev/packages/file_selector) — BSD-3-Clause
+  用于插入图片 / 文件时的系统文件选择器
+- camera / camera_windows (https://pub.dev/packages/camera) — BSD-3-Clause
+  拍照；Android 侧使用 CameraX（androidx.camera，Apache-2.0），Windows 侧使用 camera_windows
+- pdfrx / pdfrx_engine / pdfium_flutter / pdfium_dart (https://github.com/espresso3389/pdfrx) — MIT
+  PDF 预览与文本层抽取；底层 PDFium — BSD-3-Clause
+- PP-OCR / PaddleOCR (https://github.com/PaddlePaddle/PaddleOCR) — Apache-2.0
+  OCR 模型与 PP-OCRv5 mobile 权重的上游来源
+- ONNX Runtime (https://github.com/microsoft/onnxruntime) — MIT
+  PP-OCR 的本地推理运行时（经 onnxruntime_v2）
+- RapidOCR 预转换模型 (https://github.com/RapidAI/RapidOCR) — Apache-2.0
+  PP-OCRv5 ONNX 模型来源（v3.9.2，经魔搭社区分发）。模型不随安装包，
+  首次启动时按需下载到应用数据目录；det 模型下载后把 IR 版本从 10 改成 9
+  以匹配内置 ONNX Runtime（opset 14 不变）。
+  OCR 管线（检测后处理 / CTC 解码 / 预处理）为本项目自行实现。
 
 Dart / Flutter 依赖包的完整许可清单随应用一起打包，
 可在 设置 → 关于 → 查看开源许可 里查看。

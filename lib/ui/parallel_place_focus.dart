@@ -14,8 +14,8 @@
 
 import 'dart:math' as math;
 
-class LaneFocus {
-  LaneFocus({this.timeConstant = 0.065});
+class ParallelPlaceFocus {
+  ParallelPlaceFocus({this.timeConstant = 0.065});
 
   /// 时间常数（秒）。越小越快；65ms 大约 0.3 秒到位，跟 220ms 的 easeOut 手感接近。
   final double timeConstant;
@@ -26,7 +26,7 @@ class LaneFocus {
   String? _target;
 
   /// 某一列现在展开到什么程度（0..1）。
-  double of(String laneId) => _t[laneId] ?? 0;
+  double of(String parallelPlaceId) => _t[parallelPlaceId] ?? 0;
 
   /// 现在“有东西在展开”的程度：取各列里最大的那个。
   double get any {
@@ -41,8 +41,8 @@ class LaneFocus {
   String? get target => _target;
 
   /// 换目标。真正的过渡发生在 [advance] 里。
-  void focus(String? laneId) {
-    _target = laneId;
+  void focus(String? parallelPlaceId) {
+    _target = parallelPlaceId;
   }
 
   /// 什么都没展开、也没在动。
@@ -55,12 +55,12 @@ class LaneFocus {
   }
 
   /// 往前走 dt 秒。返回 true = 还在动，调用方应该继续要下一帧。
-  bool advance(double dt, Iterable<String> laneIds) {
+  bool advance(double dt, Iterable<String> parallelPlaceIds) {
     // 指数趋近：每帧走掉剩余距离的一部分。这样和帧率无关，
     // 掉帧的时候不会一夜之间走完。
     final double k = 1 - math.exp(-dt / timeConstant);
     bool moving = false;
-    for (final String id in laneIds) {
+    for (final String id in parallelPlaceIds) {
       final double goal = id == _target ? 1.0 : 0.0;
       final double cur = _t[id] ?? 0;
       final double next = cur + (goal - cur) * k;
@@ -80,11 +80,11 @@ class LaneFocus {
 
   /// 一列的宽度：常态 → （有人展开时）收窄 → （自己展开时）整列宽。
   double width(
-    String laneId, {
+    String parallelPlaceId, {
     required double compact,
     required double shrunk,
     required double focus,
   }) {
-    return compact + (shrunk - compact) * any + (focus - shrunk) * of(laneId);
+    return compact + (shrunk - compact) * any + (focus - shrunk) * of(parallelPlaceId);
   }
 }

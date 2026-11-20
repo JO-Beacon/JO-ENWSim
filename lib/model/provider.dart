@@ -1,10 +1,13 @@
 // 模型服务商：协议 / 服务商 / 模型。
 
+import 'tts_types.dart';
+
 /// 接口的“形状”：鉴权方式与请求体按这个走。
 ///
-/// 同一个厂商可能同时提供多种形状，例如 DeepSeek 就同时有
-/// OpenAI 格式与 Anthropic 格式两个端点。
-enum Wire { openai, anthropic, google }
+/// **按端点名区分，不按厂商**：`chat/completions`、`/messages`、`/responses`。
+/// 所以第一项叫 [chatCompletions]——既不叫 openai（真 OpenAI 只是用它的一家），
+/// 也不叫 compatible（Responses 也兼容，说了等于没说）。
+enum Wire { chatCompletions, anthropic, google, responses }
 
 /// 接口协议。
 enum Protocol {
@@ -12,7 +15,7 @@ enum Protocol {
     'OpenAI',
     'https://api.openai.com/v1',
     '/chat/completions',
-    Wire.openai,
+    Wire.chatCompletions,
     '/models',
   ),
   // Google 的列表端点形状不一样（带 ?key=），但路径仍是 /models。
@@ -35,7 +38,18 @@ enum Protocol {
     'DeepSeek',
     'https://api.deepseek.com',
     '/chat/completions',
-    Wire.openai,
+    Wire.chatCompletions,
+    '/models',
+  ),
+  // DeepSeek 的 Responses 格式。跟上面那个是**并列**的两种端点，
+  // 不是一个开关切出来的：请求体完全不同（input / instructions /
+  // max_output_tokens / reasoning.effort / text.format），
+  // 响应也是 output item 列表。
+  deepseekResponses(
+    'DeepSeek · Responses 格式',
+    'https://api.deepseek.com',
+    '/responses',
+    Wire.responses,
     '/models',
   ),
   // DeepSeek 的 Anthropic 格式**不能直接把 /models 接在 /anthropic 后面**；
@@ -50,7 +64,7 @@ enum Protocol {
   ),
   // 三种“兼容”只保证形状像。列模型这条按 OpenAI 的**约定**试一下是可以的，
   // 但那是约定、不是承诺——拉不到的时候要说清是“不确知”，别说人家坏了。
-  openaiCompatible('OpenAI 兼容', '', '', Wire.openai, '/models'),
+  openaiCompatible('OpenAI 兼容', '', '', Wire.chatCompletions, '/models'),
   anthropicCompatible('Anthropic 兼容', '', '', Wire.anthropic, null),
   googleCompatible('Google 兼容', '', '', Wire.google, null);
 
@@ -77,7 +91,10 @@ enum Protocol {
   final String? listPath;
 
   /// 是不是 DeepSeek 自家的规矩（思考模式、缓存计费、402 余额不足等）。
-  bool get isDeepSeek => this == deepseek || this == deepseekAnthropic;
+  bool get isDeepSeek =>
+      this == deepseek ||
+      this == deepseekAnthropic ||
+      this == deepseekResponses;
 
   /// 是不是**真 OpenAI**（不是“OpenAI 兼容”）。
   bool get isOpenAi => this == openai;
@@ -136,7 +153,7 @@ class ThinkingSpec {
 /// 各家“思考”的规矩。**全部来自官方资料，不是推的**。
 ///
 /// 这份是**程序自己的知识**，不是给用户看的设置项——
-/// 界面上不摆“思考”（那是“选择”，归角色那层，进聊天栏）。
+/// 界面上不摆“思考”（那是“选择”，归角色那层，在行动输入框旁）。
 /// 以后引擎发请求时按这个决定该发哪个字段。
 ///
 /// - OpenAI：`reasoning_effort` = none/minimal/low/medium/high/xhigh/max
@@ -155,9 +172,12 @@ class ThinkingSpec {
 ///   所以这里**两个都摆**：具体用哪个由你按自己的模型代次选。
 ThinkingSpec thinkingSpecOf(Protocol p) {
   if (p.isDeepSeek) {
+    // Chat Completions 的 `reasoning_effort` 与 Messages 的
+    // `output_config.effort` 都接受 `none`，语义是**关闭思考模式**。
+    // 显式设置的 `thinking.type` 优先于它，所以两个都摆不冲突。
     return const ThinkingSpec(
       hasMode: true,
-      levels: <String>['low', 'high', 'max'],
+      levels: <String>['none', 'low', 'high', 'max'],
     );
   }
   if (p.isOpenAi) {
@@ -259,9 +279,9 @@ class ModelCaps {
 
   /// 支不支持流式。
   ///
-  /// **三态，不是 bool**：true 支持 / false 不支持 / **null 不知道**。
-  /// 用户自加的模型没声明能力 —— 那是“不知道”，不是“不支持”。
-  /// （tools / reasoning / vision 现在还是 bool，有同样的毛病，以后一起改。）
+  /// **三态，不是 bool**：true 支持 / false 不支持 / **null 没填**。
+  /// 没填一律当**不支持**——用户定的规矩：自定义服务商不填，就是没有这个能力，
+  /// 不猜、也不替它兜底。
   final bool? stream;
 
   Map<String, Object?> toJson() => <String, Object?>{
@@ -295,7 +315,7 @@ class ModelCaps {
 /// 一个模型条目。
 ///
 /// **只有能力声明，没有选择。**
-/// 采样策略、思考档位这类“选择”不放在这儿（它们是跟着角色的，进聊天栏）。
+/// 采样策略、思考档位这类“选择”不放在这儿（它们是跟着角色的，在行动输入框旁）。
 class ModelRef {
   const ModelRef({
     required this.id,
@@ -358,26 +378,29 @@ class ModelRef {
 /// 自定义服务商的四种起手形状。
 ///
 /// 预设来的服务商**没有**这个标记：端点对它们是死的事实，不用用户填。
+/// 自定义服务商的三种起手形状。
+///
+/// 预设来的服务商**没有**这个标记：端点对它们是死的事实，不用用户填。
+///
+/// **没有 Responses 这一项**：Responses 不是一个可以“顺带勾上”的形状，
+/// 它的请求体（input / instructions / max_output_tokens …）跟 chat 完全不同，
+/// 是并列的一整套协议。要它，就选 `Protocol.deepseekResponses` 那种并列协议。
 enum CustomShape {
-  openaiChat('OpenAI 兼容 · chat/completions', Protocol.openaiCompatible, false),
-  openaiResponses('OpenAI 兼容 · Responses API', Protocol.openaiCompatible, true),
-  google('Google 兼容', Protocol.googleCompatible, false),
-  anthropic('Anthropic 兼容', Protocol.anthropicCompatible, false);
+  openaiChat('OpenAI 兼容 · chat/completions', Protocol.openaiCompatible),
+  google('Google 兼容', Protocol.googleCompatible),
+  anthropic('Anthropic 兼容', Protocol.anthropicCompatible);
 
-  const CustomShape(this.label, this.protocol, this.responses);
+  const CustomShape(this.label, this.protocol);
 
   final String label;
   final Protocol protocol;
-
-  /// 是否走 Responses API
-  final bool responses;
 }
 
 /// 服务的类型。三类服务共用同一套“服务 + 清单”的结构。
 enum ServiceKind {
   model('模型'),
   search('搜索'),
-  voice('语音');
+  tts('TTS');
 
   const ServiceKind(this.label);
 
@@ -395,8 +418,10 @@ enum ServiceKind {
 ///   结果在 `web_search_tool_result` 块里；
 /// · [mimo]：小米 MiMo 的 `web_search` 工具（带 `max_keyword` 等参数），
 ///   结果在 `message.annotations` 里；
+/// · [deepseek]：DeepSeek 自己的 `deepseek_web_search` 与 `deepseek_read_url`
+///   服务端工具，Chat Completions 与 Messages 两种协议都支持；
 /// · [none]：这家没有内置搜索。
-enum BuiltinSearch { none, anthropic, mimo }
+enum BuiltinSearch { none, anthropic, mimo, deepseek }
 
 /// 一个服务。
 class Provider {
@@ -409,9 +434,9 @@ class Provider {
     this.apiKey = '',
     this.baseUrl = '',
     this.apiPath = '',
-    this.useResponsesApi = false,
     this.builtinSearch = false,
     this.models = const <ModelRef>[],
+    this.voices = const <TtsVoice>[],
     this.custom,
     this.kind = ServiceKind.model,
   });
@@ -428,9 +453,6 @@ class Provider {
   final String baseUrl;
   final String apiPath;
 
-  /// 只有 OpenAI 协议用得上
-  final bool useResponsesApi;
-
   /// 内置搜索（服务端搜索工具）。
   ///
   /// **这是模型服务的能力**，不是搜索服务：模型自己决定搜不搜、搜什么，
@@ -446,11 +468,19 @@ class Provider {
         (baseUrl.trim().isEmpty ? protocol.baseUrl : baseUrl.trim())
             .toLowerCase();
     if (base.contains('xiaomimimo')) return BuiltinSearch.mimo;
+    // DeepSeek 有自己的联网工具，两种协议都支持；
+    // **别让它落到下面那条通用 anthropic 分支**——那是 `web_search_20250305`，
+    // 跟 `deepseek_web_search` 是两个名字。
+    if (protocol.isDeepSeek) return BuiltinSearch.deepseek;
     if (protocol.wire == Wire.anthropic) return BuiltinSearch.anthropic;
     return BuiltinSearch.none;
   }
 
   final List<ModelRef> models;
+
+  /// 这家 TTS 的音色清单。空 = 用内置预设（OpenAI / MiMo 各一套）；
+  /// 非空 = 用户可编辑的本地清单，直接覆盖预设。
+  final List<TtsVoice> voices;
 
   /// 自定义起手形状。null = 从预设来的（端点不可改）。
   final CustomShape? custom;
@@ -465,6 +495,11 @@ class Provider {
   String get maxTokensParam =>
       protocol.isOpenAi ? 'max_completion_tokens' : 'max_tokens';
 
+  /// 这次请求走不走 Responses 格式。
+  ///
+  /// **由协议决定**，不是一个开关：选了 Responses 协议就是这条路。
+  bool get usesResponses => protocol.wire == Wire.responses;
+
   /// 完整接口地址（展示用）。
   String get endpoint {
     final String base =
@@ -472,6 +507,8 @@ class Provider {
           RegExp(r'/+$'),
           '',
         );
+    // Responses 是并列协议，它的 apiPath 本来就是 `/responses`，
+    // 所以这里不需要特殊分支——照常拼就行。
     final String path = apiPath.trim().isEmpty
         ? protocol.apiPath
         : apiPath.trim();
@@ -488,9 +525,9 @@ class Provider {
     String? apiKey,
     String? baseUrl,
     String? apiPath,
-    bool? useResponsesApi,
     bool? builtinSearch,
     List<ModelRef>? models,
+    List<TtsVoice>? voices,
     CustomShape? custom,
     ServiceKind? kind,
   }) => Provider(
@@ -502,9 +539,9 @@ class Provider {
     apiKey: apiKey ?? this.apiKey,
     baseUrl: baseUrl ?? this.baseUrl,
     apiPath: apiPath ?? this.apiPath,
-    useResponsesApi: useResponsesApi ?? this.useResponsesApi,
     builtinSearch: builtinSearch ?? this.builtinSearch,
     models: models ?? this.models,
+    voices: voices ?? this.voices,
     custom: custom ?? this.custom,
     kind: kind ?? this.kind,
   );
@@ -518,9 +555,9 @@ class Provider {
     'apiKey': apiKey,
     'baseUrl': baseUrl,
     'apiPath': apiPath,
-    'useResponsesApi': useResponsesApi,
     'builtinSearch': builtinSearch,
     'models': models.map((ModelRef m) => m.toJson()).toList(),
+    'voices': voices.map((TtsVoice v) => v.toJson()).toList(),
     'custom': custom?.name,
     'kind': kind.name,
   };
@@ -529,6 +566,8 @@ class Provider {
     final Protocol protocol = Provider._protocolOf(j['protocol']);
     final List<dynamic> raw =
         (j['models'] as List<dynamic>?) ?? const <dynamic>[];
+    final List<dynamic> rawVoices =
+        (j['voices'] as List<dynamic>?) ?? const <dynamic>[];
     return Provider(
       id: '${j['id'] ?? ''}',
       protocol: protocol,
@@ -538,11 +577,14 @@ class Provider {
       apiKey: '${j['apiKey'] ?? ''}',
       baseUrl: '${j['baseUrl'] ?? protocol.baseUrl}',
       apiPath: '${j['apiPath'] ?? protocol.apiPath}',
-      useResponsesApi: j['useResponsesApi'] == true,
       builtinSearch: j['builtinSearch'] == true,
       models: raw
           .whereType<Map<String, dynamic>>()
           .map(Provider._model)
+          .toList(),
+      voices: rawVoices
+          .map(TtsVoice.fromJson)
+          .whereType<TtsVoice>()
           .toList(),
       custom: Provider._custom('${j['custom'] ?? ''}'),
       kind: Provider._kindOf(j['kind']),
@@ -657,6 +699,12 @@ const List<ProviderPreset> kProviderPresets = <ProviderPreset>[
     models: kDeepSeekModels,
   ),
   ProviderPreset(
+    name: 'DeepSeek · Responses 格式',
+    protocol: Protocol.deepseekResponses,
+    baseUrl: 'https://api.deepseek.com',
+    models: kDeepSeekModels,
+  ),
+  ProviderPreset(
     name: 'DeepSeek · Anthropic 格式',
     protocol: Protocol.deepseekAnthropic,
     baseUrl: 'https://api.deepseek.com/anthropic',
@@ -727,7 +775,7 @@ const List<ProviderPreset> kProviderPresets = <ProviderPreset>[
 /// 这两类服务现在还不真发请求）。
 const List<ProviderPreset> kSearchPresets = <ProviderPreset>[
   // DeepSeek 的 Search / Fetch 是目前唯一**真接了**的一家：
-  // POST /v1/tools/search、/v1/tools/fetch，Bearer 鉴权，按次计费。
+  // POST /v1/tools/search、/v1/tools/fetch，Bearer 鉴权。
   // 文档：`AGENTS/docs-deepseek/guide-search-fetch.md`
   ProviderPreset(
     name: 'DeepSeek',
@@ -766,10 +814,10 @@ const List<ProviderPreset> kSearchPresets = <ProviderPreset>[
   ),
 ];
 
-/// 语音服务的预设。同样是起手用的，随便改。
-const List<ProviderPreset> kVoicePresets = <ProviderPreset>[
+/// TTS 服务的预设。同样是起手用的，随便改。
+const List<ProviderPreset> kTtsPresets = <ProviderPreset>[
   ProviderPreset(
-    name: 'OpenAI 语音',
+    name: 'OpenAI TTS',
     protocol: Protocol.openaiCompatible,
     baseUrl: 'https://api.openai.com/v1',
   ),
@@ -779,12 +827,12 @@ const List<ProviderPreset> kVoicePresets = <ProviderPreset>[
     baseUrl: 'https://api.elevenlabs.io/v1',
   ),
   ProviderPreset(
-    name: 'MiniMax 语音',
+    name: 'MiniMax TTS',
     protocol: Protocol.openaiCompatible,
     baseUrl: 'https://api.minimax.chat/v1',
   ),
   ProviderPreset(
-    name: '火山引擎语音',
+    name: '火山引擎 TTS',
     protocol: Protocol.openaiCompatible,
     baseUrl: 'https://openspeech.bytedance.com/api/v1',
   ),
@@ -794,9 +842,16 @@ const List<ProviderPreset> kVoicePresets = <ProviderPreset>[
     baseUrl: '',
   ),
   ProviderPreset(
-    name: '讯飞语音',
+    name: '讯飞 TTS',
     protocol: Protocol.openaiCompatible,
     baseUrl: '',
+  ),
+  // MiMo 的 TTS 不是 /audio/speech，走 chat/completions + audio 参数；
+  // 文档：AGENTS/docs-mimo/tts-25.md。
+  ProviderPreset(
+    name: '小米 MiMo TTS',
+    protocol: Protocol.openaiCompatible,
+    baseUrl: 'https://api.xiaomimimo.com/v1',
   ),
 ];
 

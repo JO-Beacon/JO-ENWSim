@@ -1,0 +1,183 @@
+/// Kokoro v1.1 的声线清单（103 个）。
+///
+/// sid 映射来自 sherpa-onnx 的 v1.1 文档：
+///   0–2    英文女声（af_maple / af_sol / bf_vale）
+///   3–57   中文女声（zf_001 … zf_099）
+///   58–102 中文男声（zm_009 … zm_100）
+///
+/// 试听文本必须跟声线的主语言一致，不能拿一句中文试所有声线。
+enum KokoroLanguage {
+  english('英文'),
+  chinese('中文');
+
+  const KokoroLanguage(this.label);
+
+  final String label;
+
+  String get sample => switch (this) {
+    KokoroLanguage.english =>
+      'Hello. This is a short preview of the selected Kokoro voice.',
+    KokoroLanguage.chinese => '你好，这是当前 Kokoro 声线的试听。',
+  };
+}
+
+class KokoroVoice {
+  const KokoroVoice({
+    required this.sid,
+    required this.name,
+    required this.language,
+    required this.female,
+  });
+
+  final int sid;
+  final String name;
+  final KokoroLanguage language;
+  final bool female;
+
+  String get displayName {
+    final String gender = female ? '女声' : '男声';
+    if (sid <= 2) return '$name · $gender';
+    final String code = name.replaceFirst(RegExp(r'^(zf|zm)_'), '');
+    return '${language.label}$gender $code';
+  }
+}
+
+final List<KokoroVoice> kKokoroVoices =
+    List<KokoroVoice>.unmodifiable(<KokoroVoice>[
+      const KokoroVoice(
+        sid: 0,
+        name: 'af_maple',
+        language: KokoroLanguage.english,
+        female: true,
+      ),
+      const KokoroVoice(
+        sid: 1,
+        name: 'af_sol',
+        language: KokoroLanguage.english,
+        female: true,
+      ),
+      const KokoroVoice(
+        sid: 2,
+        name: 'bf_vale',
+        language: KokoroLanguage.english,
+        female: true,
+      ),
+      for (final MapEntry<int, String> e in _chineseNames.entries)
+        KokoroVoice(
+          sid: e.key,
+          name: e.value,
+          language: KokoroLanguage.chinese,
+          female: e.key <= 57,
+        ),
+    ]);
+
+/// v1.1 的实际 sid → name；不是从 001 顺序排下来的。
+const Map<int, String> _chineseNames = <int, String>{
+  3: 'zf_001',
+  4: 'zf_002',
+  5: 'zf_003',
+  6: 'zf_004',
+  7: 'zf_005',
+  8: 'zf_006',
+  9: 'zf_007',
+  10: 'zf_008',
+  11: 'zf_017',
+  12: 'zf_018',
+  13: 'zf_019',
+  14: 'zf_021',
+  15: 'zf_022',
+  16: 'zf_023',
+  17: 'zf_024',
+  18: 'zf_026',
+  19: 'zf_027',
+  20: 'zf_028',
+  21: 'zf_032',
+  22: 'zf_036',
+  23: 'zf_038',
+  24: 'zf_039',
+  25: 'zf_040',
+  26: 'zf_042',
+  27: 'zf_043',
+  28: 'zf_044',
+  29: 'zf_046',
+  30: 'zf_047',
+  31: 'zf_048',
+  32: 'zf_049',
+  33: 'zf_051',
+  34: 'zf_059',
+  35: 'zf_060',
+  36: 'zf_067',
+  37: 'zf_070',
+  38: 'zf_071',
+  39: 'zf_072',
+  40: 'zf_073',
+  41: 'zf_074',
+  42: 'zf_075',
+  43: 'zf_076',
+  44: 'zf_077',
+  45: 'zf_078',
+  46: 'zf_079',
+  47: 'zf_083',
+  48: 'zf_084',
+  49: 'zf_085',
+  50: 'zf_086',
+  51: 'zf_087',
+  52: 'zf_088',
+  53: 'zf_090',
+  54: 'zf_092',
+  55: 'zf_093',
+  56: 'zf_094',
+  57: 'zf_099',
+  58: 'zm_009',
+  59: 'zm_010',
+  60: 'zm_011',
+  61: 'zm_012',
+  62: 'zm_013',
+  63: 'zm_014',
+  64: 'zm_015',
+  65: 'zm_016',
+  66: 'zm_020',
+  67: 'zm_025',
+  68: 'zm_029',
+  69: 'zm_030',
+  70: 'zm_031',
+  71: 'zm_033',
+  72: 'zm_034',
+  73: 'zm_035',
+  74: 'zm_037',
+  75: 'zm_041',
+  76: 'zm_045',
+  77: 'zm_050',
+  78: 'zm_052',
+  79: 'zm_053',
+  80: 'zm_054',
+  81: 'zm_055',
+  82: 'zm_056',
+  83: 'zm_057',
+  84: 'zm_058',
+  85: 'zm_061',
+  86: 'zm_062',
+  87: 'zm_063',
+  88: 'zm_064',
+  89: 'zm_065',
+  90: 'zm_066',
+  91: 'zm_068',
+  92: 'zm_069',
+  93: 'zm_080',
+  94: 'zm_081',
+  95: 'zm_082',
+  96: 'zm_089',
+  97: 'zm_091',
+  98: 'zm_095',
+  99: 'zm_096',
+  100: 'zm_097',
+  101: 'zm_098',
+  102: 'zm_100',
+};
+
+KokoroVoice? kokoroVoiceOf(int sid) {
+  for (final KokoroVoice v in kKokoroVoices) {
+    if (v.sid == sid) return v;
+  }
+  return null;
+}

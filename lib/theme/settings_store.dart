@@ -5,6 +5,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 import '../model/model_plan.dart';
 import '../model/provider.dart';
 import '../model/shortcuts.dart';
+import '../model/tts_types.dart';
 import 'tokens.dart';
 
 /// 读存档的结果：读到了什么 + 有多少读不出来。
@@ -51,6 +52,23 @@ class SettingsStore {
   static const String _kKeys = 'input.keys';
   static const String _kPrompts = 'engine.prompts';
   static const String _kFollow = 'ui.followSystem';
+  static const String _kReadNarration = 'tts.readNarration';
+  static const String _kTtsLifecycle = 'tts.lifecycle';
+  static const String _kTtsSource = 'tts.source';
+  static const String _kTtsProviderId = 'tts.providerId';
+  static const String _kTtsVoiceId = 'tts.voiceId';
+  static const String _kTtsModelId = 'tts.modelId';
+  static const String _kTtsSpeed = 'tts.speed';
+  static const String _kTtsStyle = 'tts.style';
+  static const String _kBuiltinModelRoot = 'tts.modelRoot';
+  static const String _kProxyEnabled = 'network.proxyEnabled';
+  static const String _kProxyHost = 'network.proxyHost';
+  static const String _kProxyPort = 'network.proxyPort';
+  static const String _kAutoRunMaxTurns = 'engine.autoRunMaxTurns';
+  static const String _kModelRequestConcurrency = 'engine.modelRequestConcurrency';
+  static const String _kBackgroundRunMode = 'engine.backgroundRunMode';
+  static const String _kSearchMaxQueries = 'search.maxQueriesPerTurn';
+  static const String _kFlowOpen = 'ui.flowOpen';
   static const String _kRailW = 'layout.railW';
   static const String _kSideW = 'layout.sideW';
 
@@ -58,11 +76,37 @@ class SettingsStore {
       SettingsStore(await SharedPreferences.getInstance());
 
   JoSettings load() {
+    final int autoRunMaxTurns = _prefs.getInt(_kAutoRunMaxTurns) ?? 100;
+    final int modelRequestConcurrency =
+        _prefs.getInt(_kModelRequestConcurrency) ?? 1;
+    final int searchMaxQueries = _prefs.getInt(_kSearchMaxQueries) ?? 10;
     return JoSettings(
       isDark: _prefs.getBool(_kDark) ?? true,
       followSystem: _prefs.getBool(_kFollow) ?? false,
       bodySize: _prefs.getDouble(_kBodySize) ?? 16,
       serifBody: _prefs.getBool(_kSerif) ?? true,
+      readNarration: _prefs.getBool(_kReadNarration) ?? true,
+      ttsSource: _sourceOf(_prefs.getString(_kTtsSource)),
+      ttsProviderId: _prefs.getString(_kTtsProviderId) ?? '',
+      ttsVoiceId: _prefs.getString(_kTtsVoiceId) ?? '0',
+      ttsModelId: _prefs.getString(_kTtsModelId) ?? 'melo',
+      ttsSpeed: _prefs.getDouble(_kTtsSpeed) ?? 1.0,
+      ttsStyle: _prefs.getString(_kTtsStyle) ?? '',
+      ttsLifecycle: _lifecycleOf(_prefs.getString(_kTtsLifecycle)),
+      builtinModelRoot: _prefs.getString(_kBuiltinModelRoot) ?? '',
+      proxyEnabled: _prefs.getBool(_kProxyEnabled) ?? false,
+      proxyHost: _prefs.getString(_kProxyHost) ?? '127.0.0.1',
+      proxyPort: _prefs.getInt(_kProxyPort) ?? 7890,
+      autoRunMaxTurns: autoRunMaxTurns <= 0 ? 0 : autoRunMaxTurns,
+      modelRequestConcurrency:
+          modelRequestConcurrency < 1 ? 1 : modelRequestConcurrency,
+      backgroundRunMode: BackgroundRunMode.values.where(
+        (BackgroundRunMode mode) => mode.name == _prefs.getString(_kBackgroundRunMode),
+      ).firstOrNull ?? BackgroundRunMode.step,
+      searchMaxQueriesPerTurn: searchMaxQueries < 1
+          ? 1
+          : (searchMaxQueries > 100 ? 100 : searchMaxQueries),
+      flowOpen: _prefs.getBool(_kFlowOpen) ?? false,
     );
   }
 
@@ -71,6 +115,37 @@ class SettingsStore {
     await _prefs.setBool(_kFollow, s.followSystem);
     await _prefs.setDouble(_kBodySize, s.bodySize);
     await _prefs.setBool(_kSerif, s.serifBody);
+    await _prefs.setBool(_kReadNarration, s.readNarration);
+    await _prefs.setString(_kTtsSource, s.ttsSource.name);
+    await _prefs.setString(_kTtsProviderId, s.ttsProviderId);
+    await _prefs.setString(_kTtsVoiceId, s.ttsVoiceId);
+    await _prefs.setString(_kTtsModelId, s.ttsModelId);
+    await _prefs.setDouble(_kTtsSpeed, s.ttsSpeed);
+    await _prefs.setString(_kTtsStyle, s.ttsStyle);
+    await _prefs.setString(_kTtsLifecycle, s.ttsLifecycle.name);
+    await _prefs.setString(_kBuiltinModelRoot, s.builtinModelRoot);
+    await _prefs.setBool(_kProxyEnabled, s.proxyEnabled);
+    await _prefs.setString(_kProxyHost, s.proxyHost);
+    await _prefs.setInt(_kProxyPort, s.proxyPort);
+    await _prefs.setInt(_kAutoRunMaxTurns, s.autoRunMaxTurns);
+    await _prefs.setInt(_kModelRequestConcurrency, s.modelRequestConcurrency);
+    await _prefs.setString(_kBackgroundRunMode, s.backgroundRunMode.name);
+    await _prefs.setInt(_kSearchMaxQueries, s.searchMaxQueriesPerTurn);
+    await _prefs.setBool(_kFlowOpen, s.flowOpen);
+  }
+
+  static TtsLifecycle _lifecycleOf(String? value) {
+    for (final TtsLifecycle x in TtsLifecycle.values) {
+      if (x.name == value) return x;
+    }
+    return TtsLifecycle.coldStart;
+  }
+
+  static TtsSource _sourceOf(String? value) {
+    for (final TtsSource x in TtsSource.values) {
+      if (x.name == value) return x;
+    }
+    return TtsSource.builtin;
   }
 
   /// 两侧栏的宽度（拖动条拖出来的）。没存过就是 null，由界面用默认值。
@@ -212,7 +287,7 @@ class SettingsStore {
 
   /// 每个世界的模型配置（世界默认 + 逐步骤）。逐条解析，坏条跳过。
   ///
-  /// 不存这里的话，选完模型一重启就没了 —— 发言框又会写回“未选择”。
+  /// 不存这里的话，选完模型一重启就没了 —— 行动输入框又会写回“未选择”。
   LoadResult<Map<String, ModelPlan>> loadWorldPlans() {
     const LoadResult<Map<String, ModelPlan>> empty =
         LoadResult<Map<String, ModelPlan>>(value: <String, ModelPlan>{});

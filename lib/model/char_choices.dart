@@ -16,7 +16,7 @@ class CharChoices {
     this.stream = false,
     this.effortLevel = '',
     this.effortBudget = '',
-    this.jsonOutput = false,
+    this.jsonOutput = true,
   });
 
   /// 温度。空 = 不禁用 / 不传。
@@ -84,6 +84,8 @@ class CharChoices {
     stream: j['stream'] == true,
     effortLevel: '${j['effortLevel'] ?? ''}',
     effortBudget: '${j['effortBudget'] ?? ''}',
-    jsonOutput: j['jsonOutput'] == true,
+    // 缺省按“要 JSON”处理：这个项目每一步都靠 JSON 解析结果，
+    // 把没存过的旧数据读成 false 会让它们静默失去 JSON 模式。
+    jsonOutput: j['jsonOutput'] != false,
   );
 }

@@ -6,7 +6,7 @@ plugins {
 
 android {
     namespace = "io.github.jobeacon.joenws"
-    compileSdk = flutter.compileSdkVersion
+    compileSdk = 36
     ndkVersion = flutter.ndkVersion
 
     compileOptions {
@@ -17,12 +17,25 @@ android {
     defaultConfig {
         // TODO: Specify your own unique Application ID (https://developer.android.com/studio/build/application-id.html).
         applicationId = "io.github.jobeacon.joenws"
-        // You can update the following values to match your application needs.
-        // For more information, see: https://flutter.dev/to/review-gradle-config.
-        minSdk = flutter.minSdkVersion
+        // PP-OCR 的内置 native 引擎要求 API 26。
+        minSdk = 26
         targetSdk = flutter.targetSdkVersion
         versionCode = flutter.versionCode
         versionName = flutter.versionName
+        // ABI 交给 flutter build apk --split-per-abi 的 target-platform 决定。
+        // 这里不要写 ndk.abiFilters：两者同时存在会冲突。
+    }
+
+    packaging {
+        jniLibs {
+            // sherpa_onnx 和 onnxruntime 都带同名的 ONNX Runtime；每个 ABI 保留一份。
+            pickFirsts += setOf(
+                "lib/arm64-v8a/libonnxruntime.so",
+                "lib/armeabi-v7a/libonnxruntime.so",
+                "lib/x86/libonnxruntime.so",
+                "lib/x86_64/libonnxruntime.so",
+            )
+        }
     }
 
     buildTypes {

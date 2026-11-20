@@ -43,6 +43,12 @@ migrate_working_dir/
 app.*.symbols
 app.*.map.json
 
+# 本地 TTS 模型缓存（构建不再打包；正式渠道是 设置 → 可下载模型）
+assets/models/tts/
+# OCR 模型改为运行时下载，不进版本控制（清单与校验值在 lib/model/ocr/ocr_models.dart）
+assets/models/*.onnx
+assets/models/*_dict.txt
+
 # 私有 / 内部文件（不进公开仓库）
-AGENTS/
+/AGENTS/
 AGENTS.md

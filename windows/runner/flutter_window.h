@@ -34,6 +34,10 @@ class FlutterWindow : public Win32Window {
   // Channel used by Dart to set the caption colors (joenws/window).
   std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
       window_channel_;
+
+  // Channel used by Dart to play built-in TTS WAV files (joenws/audio).
+  std::unique_ptr<flutter::MethodChannel<flutter::EncodableValue>>
+      audio_channel_;
 };
 
 #endif  // RUNNER_FLUTTER_WINDOW_H_

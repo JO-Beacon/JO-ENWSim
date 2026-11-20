@@ -1,17 +1,10 @@
 // 右栏那张“回合流程”图。
 //
-// 它是**会展开的**：收起时只占一行（标题 + 当前步），点一下展开成完整一张图；
-// 展开时整体缩放到一屏能看全，不靠滚（这正是之前的问题：固定 340 高的窗口，
-// 图有 570 高，底部永远看不全）。
-//
-// 这里钉四件事：
-//   1. 引擎报的步骤 id 能不能落到图上的节点；
-//   2. 默认收起：只有一行，没有图；
-//   3. 展开/收起都点得动，且展开后确实出现了图；
-//   4. 各种 active / done 组合都不炸。
+// 收起时只占一行，展开后整张图随右栏滚动。
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:joenws/engine/step_id.dart';
 import 'package:joenws/theme/tokens.dart';
 import 'package:joenws/ui/turn_flow.dart';
 
@@ -26,18 +19,64 @@ Widget host(Widget child) => MaterialApp(
 final Finder diagram = find.byKey(const ValueKey<String>('flow-diagram'));
 
 void main() {
-  test('步骤 id → 图上的节点', () {
-    expect(flowStepOf('A0'), FlowStep.a0);
-    expect(flowStepOf('AD'), FlowStep.decide);
-    expect(flowStepOf('A1'), FlowStep.a1);
-    expect(flowStepOf('A2'), FlowStep.a2);
-    expect(flowStepOf('B1'), FlowStep.b1);
-    expect(flowStepOf('A3'), FlowStep.a3);
-    expect(flowStepOf('B2'), FlowStep.b2);
-    expect(flowStepOf('A4'), FlowStep.a4);
-    // 认不出来的就当没有，不瞎指。
+  test('每个正式步骤恰好一个块，角色、批次和裁定后缀复用原块', () {
+    final ids = <String>{
+      for (final step in kAiSteps) step.id,
+      'SYS_SCHEDULE', StepId.sysRecord, StepId.sysCommit, StepId.sysRecovery,
+    };
+    expect(FlowStep.values.map((step) => step.id), unorderedEquals(ids));
+    for (final id in ids) {
+      expect(flowStepOf(id)?.id, id);
+    }
+    expect(flowStepOf('CH_PERCEIVE:慧音:env'), FlowStep.perceive);
+    expect(flowStepOf('GM_OBSERVE_SCENE:env'), FlowStep.observeScene);
+    expect(flowStepOf('CH_MEMORY_WRITE:角色'), FlowStep.writeMemory);
+    expect(flowStepOf('CH_MEMORY_RECALL:角色'), FlowStep.recall);
+    expect(flowStepOf('GM_RESOLVE_ACTION:contest'), FlowStep.resolve);
     expect(flowStepOf(null), isNull);
     expect(flowStepOf('XX'), isNull);
+  });
+
+  test('按回合类型交付见闻、处理玩家输入、裁定与重写', () {
+    final edges = {for (final edge in turnFlowEdges) (edge.from, edge.to)};
+    void expectPath(List<FlowStep> steps) {
+      for (int i = 1; i < steps.length; i++) {
+        expect(edges, contains((steps[i - 1], steps[i])));
+      }
+    }
+    expectPath([FlowStep.route, FlowStep.observeScene, FlowStep.perceive, FlowStep.writeMemory,
+      FlowStep.cast, FlowStep.eligibility, FlowStep.selectActor, FlowStep.recall, FlowStep.act,
+      FlowStep.record, FlowStep.mergePlace, FlowStep.commit, FlowStep.narrate, FlowStep.review]);
+    expectPath([FlowStep.eligibility, FlowStep.environment, FlowStep.record, FlowStep.observeScene,
+      FlowStep.perceive, FlowStep.writeMemory, FlowStep.mergePlace]);
+    expectPath([FlowStep.route, FlowStep.environment, FlowStep.schedule]);
+    expectPath([FlowStep.recall, FlowStep.parseInput, FlowStep.act, FlowStep.resolve, FlowStep.record]);
+    expectPath([FlowStep.resolve, FlowStep.commit]);
+    expectPath([FlowStep.review, FlowStep.narrate]);
+  });
+
+  test('步骤块互不重叠，箭头只接触块的边缘', () {
+    final bounds = Offset.zero & turnFlowSize;
+    for (final step in FlowStep.values) {
+      expect(bounds.intersect(step.rect), step.rect);
+      for (final other in FlowStep.values.where((other) => other != step)) {
+        expect(step.rect.overlaps(other.rect), isFalse, reason: '${step.id} / ${other.id}');
+      }
+    }
+    for (final edge in turnFlowEdges) {
+      final points = edge.points;
+      for (int i = 1; i < points.length; i++) {
+        final start = points[i - 1];
+        final end = points[i];
+        expect(start, isNot(end));
+        expect(start.dx == end.dx || start.dy == end.dy, isTrue);
+        final segment = Rect.fromPoints(start, end).inflate(0.1);
+        for (final step in FlowStep.values) {
+          expect(segment.overlaps(step.rect.deflate(0.5)), isFalse,
+              reason: '${edge.from.id} 到 ${edge.to.id} 的连线穿过了 ${step.id}');
+        }
+      }
+    }
   });
 
   testWidgets('收起时只占一行：有标题和“展开”，没有图', (WidgetTester t) async {
@@ -53,10 +92,10 @@ void main() {
 
   testWidgets('收起时也看得到当前跑到哪一步', (WidgetTester t) async {
     await t.pumpWidget(
-      host(TurnFlow(palette: JoPalette.dark, active: 'B1', onToggle: () {})),
+      host(TurnFlow(palette: JoPalette.dark, active: 'CH_PERCEIVE', onToggle: () {})),
     );
     expect(find.textContaining('当前：'), findsOneWidget);
-    expect(find.textContaining(labelOf(FlowStep.b1)), findsOneWidget);
+    expect(find.textContaining(FlowStep.perceive.title), findsOneWidget);
   });
 
   testWidgets('点标题能展开、再点能收起', (WidgetTester t) async {
@@ -100,8 +139,8 @@ void main() {
           child: TurnFlow(
             palette: JoPalette.dark,
             expanded: true,
-            active: 'A3',
-            done: const <String>{'A0', 'AD', 'A2', 'B1'},
+            active: 'GM_SELECT_ACTOR',
+            done: const <String>{'GM_OPEN_PLACE', 'GM_ROUTE', 'GM_ELIGIBILITY', 'CH_PERCEIVE'},
             onToggle: () {},
           ),
         ),
@@ -110,8 +149,7 @@ void main() {
 
     expect(t.takeException(), isNull);
     final Size s = t.getSize(diagram);
-    // 宽高比例就是图本身的比例（332:700），没有被风箱式压成一条。
-    expect(s.width / s.height, closeTo(332 / 700, 0.01));
+    expect(s.aspectRatio, closeTo(turnFlowSize.aspectRatio, 0.01));
     // 图比一屏高——所以它不靠“缩到一屏内”，而是靠外层一起滚。
     expect(s.height, greaterThan(700 * 0.5));
   });
@@ -181,16 +219,8 @@ void main() {
   });
 
   testWidgets('每一步当 active 都不炸（含跑过的那些）', (WidgetTester t) async {
-    for (final String id in <String>[
-      'A0',
-      'AD',
-      'A1',
-      'A2',
-      'B1',
-      'A3',
-      'B2',
-      'A4',
-    ]) {
+    for (final step in FlowStep.values) {
+      final String id = step.id;
       await t.pumpWidget(
         host(
           SingleChildScrollView(
@@ -198,13 +228,45 @@ void main() {
               palette: JoPalette.dark,
               expanded: true,
               active: id,
-              done: <String>{'A0', 'AD', id},
+              done: <String>{'GM_OPEN_PLACE', 'GM_ROUTE', id},
               onToggle: () {},
             ),
           ),
         ),
       );
       expect(t.takeException(), isNull, reason: 'active=$id 时抛了');
+      expect(find.text(step.title), findsOneWidget);
+      expect(find.text('当前：$id · ${step.title}'), findsOneWidget);
+    }
+  });
+
+  testWidgets('步骤块的底色跟着调色板走，不再写死一套亮色', (WidgetTester t) async {
+    Color fillOf(String title) {
+      final DecoratedBox box = t.widget<DecoratedBox>(
+        find
+            .ancestor(of: find.text(title), matching: find.byType(DecoratedBox))
+            .first,
+      );
+      return (box.decoration as BoxDecoration).color!;
+    }
+
+    for (final (JoPalette palette, bool dark) in <(JoPalette, bool)>[
+      (JoPalette.dark, true),
+      (JoPalette.light, false),
+    ]) {
+      await t.pumpWidget(
+        host(
+          SingleChildScrollView(
+            child: TurnFlow(palette: palette, expanded: true, onToggle: () {}),
+          ),
+        ),
+      );
+      final double gm = fillOf('选择回合路线').computeLuminance();
+      final double act = fillOf('提出角色行动').computeLuminance();
+      // 写死亮色的老实现，在暗色下这两块都会是 0.8 以上的亮度。
+      expect(gm < 0.2, dark, reason: '${palette.isDark} 下程序步骤的底色亮度是 $gm');
+      expect(act < 0.2, dark, reason: '${palette.isDark} 下角色行动的底色亮度是 $act');
+      expect((act - gm).abs(), greaterThan(0.02), reason: '行动块和程序块看不出轻重');
     }
   });
 }

@@ -1,4 +1,4 @@
-// 聊天栏里的“选择”面板。
+// 行动输入框旁的“选择”面板。
 //
 // 采样策略、最大输出、流式、推理档位、要不要 JSON —— 这些**跟着角色走**，
 // 每个角色各有一整套。这个面板一次编辑一个角色。
@@ -23,6 +23,12 @@ typedef CharModelInfo = ({
 
   /// 那个协议下“思考”长什么样。isEmpty = 我们不知道
   ThinkingSpec spec,
+
+  /// 这个协议能不能用 JSON 模式。
+  ///
+  /// 只有 **Chat Completions 形状**有 `response_format`；Anthropic 形状（Claude、
+  /// DeepSeek 的 Anthropic 格式）没有这个参数，传了也不生效。
+  bool jsonSupported,
 });
 
 /// 打开选择面板。
@@ -99,7 +105,7 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
               Expanded(
                 child: Center(
                   child: Text(
-                    '这个世界还没有角色',
+                    '当前世界还没有角色',
                     style: JoFonts.meta.copyWith(color: p.secondary),
                   ),
                 ),
@@ -126,7 +132,7 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
       child: Row(
         children: <Widget>[
           Text(
-            '选择',
+            '角色设置',
             style: JoFonts.ui.copyWith(
               fontSize: 15,
               fontWeight: FontWeight.w700,
@@ -136,7 +142,7 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
           const SizedBox(width: JoSpace.s3),
           Expanded(
             child: Text(
-              '每个角色各有一套',
+              '每个角色单独设置',
               overflow: TextOverflow.ellipsis,
               style: JoFonts.meta.copyWith(color: p.secondary),
             ),
@@ -208,7 +214,7 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
       padding: const EdgeInsets.all(JoSpace.s4),
       children: <Widget>[
         // ——— 先模型 ———
-        _label(p, '这个角色用的模型'),
+        _label(p, '该角色使用的模型'),
         JoTap(
           onTap: () async {
             await widget.onPickModel(_who);
@@ -238,24 +244,24 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
                       ),
                     ),
                   ),
-                  Text('改', style: JoFonts.meta.copyWith(color: p.accent)),
+                  Text('更改', style: JoFonts.meta.copyWith(color: p.accent)),
                 ],
               ),
             );
           },
         ),
         if (caps == null)
-          _note(p, '这个模型没有能力声明（大概是用户自己加的），所以下面只摆通用的几样。')
+          _note(p, '该模型未提供能力信息，以下仅显示通用参数。')
         else
           _note(
             p,
-            '它声明：上下文 ${caps.contextWindow.isEmpty ? '—' : caps.contextWindow}'
+            '模型能力：上下文 ${caps.contextWindow.isEmpty ? '—' : caps.contextWindow}'
             ' · 输出上限 ${caps.maxOutput.isEmpty ? '—' : caps.maxOutput}'
             ' · 输入 ${caps.inputModalities.join('/')}'
-            '${caps.vision ? ' · 能看图' : ''}'
-            '${caps.tools ? ' · 工具' : ''}'
+            '${caps.vision ? ' · 图像理解' : ''}'
+            '${caps.tools ? ' · 工具调用' : ''}'
             '${caps.reasoning ? ' · 推理' : ''}'
-            '${caps.stream == true ? ' · 流式' : ''}',
+            '${caps.stream == true ? ' · 流式输出' : ''}',
           ),
         const SizedBox(height: JoSpace.s5),
 
@@ -263,14 +269,14 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
         _label(p, '温度'),
         JoInput(
           initial: c.temperature,
-          hint: '留空 = 不传',
+          hint: '留空则使用默认值',
           onChanged: (String v) => _put(c.copyWith(temperature: v)),
         ),
         const SizedBox(height: JoSpace.s4),
         _label(p, '核采样 top_p'),
         JoInput(
           initial: c.topP,
-          hint: '留空 = 不传',
+          hint: '留空则使用默认值',
           onChanged: (String v) => _put(c.copyWith(topP: v)),
         ),
         const SizedBox(height: JoSpace.s4),
@@ -278,8 +284,8 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
         JoInput(
           initial: c.maxOutput,
           hint: caps != null && caps.maxOutput.isNotEmpty
-              ? '留空 = 不传（这个模型的上限是 ${caps.maxOutput}）'
-              : '留空 = 不传（跟模型那边的“上限”不是一回事）',
+              ? '留空则使用默认值（该模型上限为 ${caps.maxOutput}）'
+              : '留空则使用默认值（与模型声明的上限不同）',
           onChanged: (String v) => _put(c.copyWith(maxOutput: v)),
         ),
         const SizedBox(height: JoSpace.s4),
@@ -292,14 +298,13 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
           value: c.stream,
           onChanged: (bool v) => _put(c.copyWith(stream: v)),
         ),
-        // 模型声明不支持流式时：这条选择**不生效**，但数据留着 ——
-        // 换回支持流式的模型就自动再生效，不用重新勾。
-        // 只对“声明了不支持”的模型这么说；没声明（不知道）的不拦。
-        if (caps != null && caps.stream == false) ...<Widget>[
+        // 没填能力就当**没有这个能力**（服务商面板里不声明 = 不支持）。
+        // 这条选择**不生效**，但数据留着 —— 换回支持流式的模型就自动再生效。
+        if (caps?.stream != true) ...<Widget>[
           const SizedBox(height: JoSpace.s2),
           Text(
-            '不生效 —— 这个模型声明它不支持流式。'
-            '你的选择留着，换回支持的模型就再生效。',
+            '当前模型未声明支持流式输出（未声明即视为不支持），该设置暂不生效。'
+            '你的选择会保留，切换回支持的模型后自动生效。',
             style: JoFonts.meta.copyWith(color: p.accent, fontSize: 10),
           ),
         ],
@@ -333,7 +338,7 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
           _label(p, '推理预算（tokens）'),
           JoInput(
             initial: c.effortBudget,
-            hint: '留空 = 不传（这个厂商用预算而不是等级）',
+            hint: '留空则使用默认值（该厂商以预算代替等级）',
             onChanged: (String v) => _put(c.copyWith(effortBudget: v)),
           ),
         ],
@@ -341,8 +346,8 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
           _note(
             p,
             caps == null
-                ? '这个模型支不支持推理、用等级还是预算，我们不知道，所以推理这两项不摆。'
-                : '这个模型没有声明支持推理，所以推理这两项不摆。',
+                ? '该模型未提供能力信息，因此不显示推理参数。'
+                : '当前接口协议不提供推理等级，因此不显示推理参数。',
           ),
         const SizedBox(height: JoSpace.s4),
         _label(p, '请求 JSON 输出'),
@@ -352,8 +357,18 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
             (label: '是', value: true),
           ],
           value: c.jsonOutput,
+          // 只有 Chat Completions 形状有 response_format；Anthropic 形状没有这个参数。
+          enabled: info.jsonSupported,
           onChanged: (bool v) => _put(c.copyWith(jsonOutput: v)),
         ),
+        if (!info.jsonSupported)
+          Padding(
+            padding: const EdgeInsets.only(top: JoSpace.s1),
+            child: Text(
+              '当前模型不支持 JSON 输出模式，该选项暂不可用。',
+              style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+            ),
+          ),
       ],
     );
   }
@@ -419,7 +434,7 @@ class _ChoicesDialogState extends State<_ChoicesDialog> {
         children: <Widget>[
           Expanded(
             child: Text(
-              '等级与预算两个都留着：到底发哪个，由引擎看当前模型决定。',
+              '推理等级与预算均可保留，系统将按当前模型自动选用其中一项。',
               style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
             ),
           ),

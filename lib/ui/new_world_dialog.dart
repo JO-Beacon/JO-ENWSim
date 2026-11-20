@@ -44,6 +44,7 @@ class _Draft {
 
 class _WorldDialogState extends State<_WorldDialog> {
   final TextEditingController _nameC = TextEditingController();
+  final TextEditingController _placeC = TextEditingController();
   final TextEditingController _settingC = TextEditingController();
   final TextEditingController _openingC = TextEditingController();
   final List<_Draft> _chars = <_Draft>[];
@@ -59,6 +60,9 @@ class _WorldDialogState extends State<_WorldDialog> {
     final World? w = widget.initial;
     if (w != null) {
       _nameC.text = w.name;
+      _placeC.text = w.parallelPlaces.isEmpty
+          ? ''
+          : w.parallelPlaces.first.place;
       _settingC.text = w.setting;
       _openingC.text = w.opening;
       for (final CharCard c in w.characters) {
@@ -78,6 +82,7 @@ class _WorldDialogState extends State<_WorldDialog> {
     _settingC.removeListener(_onText);
     _openingC.removeListener(_onText);
     _nameC.dispose();
+    _placeC.dispose();
     _settingC.dispose();
     _openingC.dispose();
     for (final _Draft d in _chars) {
@@ -133,19 +138,19 @@ class _WorldDialogState extends State<_WorldDialog> {
     }
     final World? base = widget.initial;
     final String name = _nameC.text.trim();
-    Navigator.of(context).pop(
-      World(
-        id: base?.id ?? 'w${DateTime.now().microsecondsSinceEpoch}',
-        name: name.isEmpty ? '未命名世界' : name,
-        note: base?.note ?? '刚创建 · 还没开始',
-        setting: _settingC.text.trim(),
-        opening: _openingC.text.trim(),
-        characters: cards,
-        lanes: base?.lanes ?? const <SeqLane>[],
-        moves: base?.moves ?? const <MoveLink>[],
-        playerName: _player,
-      ),
+    final World w = World(
+      id: base?.id ?? 'w${DateTime.now().microsecondsSinceEpoch}',
+      name: name.isEmpty ? '未命名世界' : name,
+      note: base?.note ?? '刚创建 · 尚未开始',
+      setting: _settingC.text.trim(),
+      opening: _openingC.text.trim(),
+      characters: cards,
+      parallelPlaces: base?.parallelPlaces ?? const <ParallelPlace>[],
+      moves: base?.moves ?? const <MoveLink>[],
+      playerName: _player,
     );
+    // 新世界不靠用户点“加地点”：第一条线在这里自动建。
+    Navigator.of(context).pop(w.withInitialParallelPlace(place: _placeC.text));
   }
 
   @override
@@ -203,7 +208,7 @@ class _WorldDialogState extends State<_WorldDialog> {
           const SizedBox(width: JoSpace.s2),
           _stepChip(p, 2, '② 补全角色'),
           const SizedBox(width: JoSpace.s2),
-          _stepChip(p, 3, '③ 扮演谁'),
+          _stepChip(p, 3, '③ 操控角色'),
           const Spacer(),
           JoTooltip(
             text: '关闭',
@@ -288,13 +293,12 @@ class _WorldDialogState extends State<_WorldDialog> {
       padding: const EdgeInsets.all(JoSpace.s4),
       children: <Widget>[
         Text(
-          '你要扮演哪一个？',
+          '开局由你操控哪个角色？',
           style: JoFonts.ui.copyWith(fontSize: 14, color: p.text),
         ),
         const SizedBox(height: JoSpace.s2),
         Text(
-          '选中的那个就是玩家角色——它跟别的角色同一套数据，'
-          '只是行动由你决定，不由 AI 决定。',
+          '选中的角色即当前操控角色，其行动由你决定，不由 AI 决定。',
           style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
         ),
         const SizedBox(height: JoSpace.s4),
@@ -334,8 +338,8 @@ class _WorldDialogState extends State<_WorldDialog> {
         const SizedBox(height: JoSpace.s4),
         Text(
           _player.isEmpty
-              ? '还没选。不选也行——那就没有玩家角色，全交给 AI。'
-              : '你扮演：$_player　（再点一下那个名字可以取消）',
+              ? '尚未选择。也可以不选，此时所有角色由 AI 接管。'
+              : '当前操控角色：$_player（再次点击该名字可取消）',
           style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
         ),
       ],
@@ -349,13 +353,16 @@ class _WorldDialogState extends State<_WorldDialog> {
       padding: const EdgeInsets.all(JoSpace.s4),
       children: <Widget>[
         _label(p, '世界名'),
-        _Input(controller: _nameC, hint: '比如：旧宅 · 雨夜'),
+        _Input(controller: _nameC, hint: '例如：旧宅 · 雨夜'),
+        const SizedBox(height: JoSpace.s5),
+        _label(p, '起始地点'),
+        _Input(controller: _placeC, hint: '开场时玩家所在的地点；留空则为“开场”'),
         const SizedBox(height: JoSpace.s5),
         _label(p, '世界观设定'),
-        _Input(controller: _settingC, hint: '时代、地点、规则、眼下的大事……', lines: 5),
+        _Input(controller: _settingC, hint: '时代、地点、规则、当前要事……', lines: 5),
         const SizedBox(height: JoSpace.s5),
         _label(p, '开场'),
-        _Input(controller: _openingC, hint: '故事开始时，玩家角色在哪里、看见什么……', lines: 6),
+        _Input(controller: _openingC, hint: '故事开始时，当前操控角色身处何处、看见什么……', lines: 6),
         const SizedBox(height: JoSpace.s5),
         Row(
           children: <Widget>[
@@ -368,7 +375,7 @@ class _WorldDialogState extends State<_WorldDialog> {
           Padding(
             padding: const EdgeInsets.only(top: JoSpace.s2),
             child: Text(
-              '不想手写就跳过，下一步 AI 会帮你列。',
+              '也可以不手写角色；下一步会列出当前可用的角色。',
               style: JoFonts.meta.copyWith(color: p.secondary),
             ),
           ),
@@ -411,7 +418,7 @@ class _WorldDialogState extends State<_WorldDialog> {
             ],
           ),
           const SizedBox(height: JoSpace.s2),
-          _Input(controller: d.personaC, hint: '人设：他是谁、想要什么、和谁有关系', lines: 3),
+          _Input(controller: d.personaC, hint: '人设：身份、目标与人物关系', lines: 3),
         ],
       ),
     );
@@ -423,7 +430,7 @@ class _WorldDialogState extends State<_WorldDialog> {
     if (_analyzing) {
       return Center(
         child: Text(
-          '正在读你的世界观和开场……',
+          '正在分析世界观设定与开场……',
           style: JoFonts.meta.copyWith(color: p.secondary),
         ),
       );
@@ -436,11 +443,11 @@ class _WorldDialogState extends State<_WorldDialog> {
 
     final String note;
     if (_chars.isEmpty) {
-      note = 'AI 没从设定和开场里找到角色，也没有要补的。直接完成就行。';
+      note = '尚未添加角色，可直接完成。';
     } else if (missing.isEmpty) {
-      note = 'AI 读完了，没有需要补全的角色。';
+      note = '所有角色均已填写人设，无需补全。';
     } else {
-      note = 'AI 读完了。这几个角色还差人设，你补一句就行：';
+      note = '以下角色尚未填写人设，补充后即可继续。';
     }
 
     return ListView(
@@ -449,7 +456,7 @@ class _WorldDialogState extends State<_WorldDialog> {
         Text(note, style: JoFonts.ui.copyWith(fontSize: 13, color: p.text)),
         const SizedBox(height: JoSpace.s2),
         Text(
-          '（引擎还没接入，这一步先用占位逻辑：列的是你手写的角色。）',
+          '当前版本仅列出你手写的角色，自动生成角色暂未开放。',
           style: JoFonts.meta.copyWith(color: p.secondary),
         ),
         const SizedBox(height: JoSpace.s4),
@@ -457,14 +464,14 @@ class _WorldDialogState extends State<_WorldDialog> {
           children: <Widget>[
             _label(p, '角色'),
             const Spacer(),
-            JoButton(text: '＋ 加一个角色', onTap: _addChar, color: p.accent),
+            JoButton(text: '＋ 添加角色', onTap: _addChar, color: p.accent),
           ],
         ),
         if (_chars.isEmpty)
           Padding(
             padding: const EdgeInsets.only(top: JoSpace.s2),
             child: Text(
-              '一个角色都没有也可以，直接完成。',
+              '也可以不添加角色，直接完成。',
               style: JoFonts.meta.copyWith(color: p.secondary),
             ),
           ),

@@ -25,7 +25,7 @@ typedef JoKeyItem = ({String id, String label, String fallback});
 /// **不含 Esc。** Esc 是多功能键（关弹窗、取消、退出），
 /// 它只做“弹窗自己那件事”，不归快捷键系统管。
 const List<JoKeyItem> kJoKeys = <JoKeyItem>[
-  // 发言框是多行的，两个动作各占一个键，都能在设置里改。
+  // 行动输入框是多行的，两个动作各占一个键，都能在设置里改。
   // 默认：回车换行（多行框的直觉）、Ctrl+回车发送（不会误发）。
   (id: JoKey.send, label: '发送', fallback: 'Ctrl+Enter'),
   (id: JoKey.newline, label: '换行', fallback: 'Enter'),

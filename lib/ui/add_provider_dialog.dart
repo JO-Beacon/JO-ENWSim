@@ -59,7 +59,6 @@ class _AddProviderDialogState extends State<_AddProviderDialog> {
     String apiPath = '',
     List<ModelRef> models = const <ModelRef>[],
     CustomShape? custom,
-    bool responses = false,
   }) {
     Navigator.of(context).pop(
       Provider(
@@ -70,7 +69,6 @@ class _AddProviderDialogState extends State<_AddProviderDialog> {
         apiPath: apiPath,
         models: models,
         custom: custom,
-        useResponsesApi: responses,
       ),
     );
   }
@@ -141,7 +139,7 @@ class _AddProviderDialogState extends State<_AddProviderDialog> {
       ),
       decoration: BoxDecoration(border: Border(top: JoShape.side(p.border))),
       child: Text(
-        '点一下就添加。名称、Key、地址这些都添加完在右边改。',
+        '点击即可添加。名称、API Key、地址等可在添加后于右侧修改。',
         style: JoFonts.meta.copyWith(color: p.secondary),
       ),
     );
@@ -166,7 +164,7 @@ class _AddProviderDialogState extends State<_AddProviderDialog> {
           controller: _q,
           onChanged: (_) => setState(() {}),
           style: JoFonts.ui.copyWith(fontSize: 13, color: p.text),
-          hint: '找厂商（名字或地址）',
+          hint: '搜索厂商（名称或地址）',
           hintStyle: JoFonts.ui.copyWith(fontSize: 13, color: p.secondary),
         ),
       ),
@@ -184,7 +182,7 @@ class _AddProviderDialogState extends State<_AddProviderDialog> {
           Padding(
             padding: const EdgeInsets.only(bottom: JoSpace.s2),
             child: Text(
-              '没找到匹配的厂商。换个词，或者用下面的“自定义”。',
+              '没有匹配的厂商。请更换关键词，或使用下方的“自定义”。',
               style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
             ),
           ),
@@ -218,7 +216,6 @@ class _AddProviderDialogState extends State<_AddProviderDialog> {
               name: '自定义 · ${c.label}',
               protocol: c.protocol,
               custom: c,
-              responses: c.responses,
             ),
           ),
       ],

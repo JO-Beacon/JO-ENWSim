@@ -19,7 +19,7 @@ class CardExtra {
   final Map<(String, int), double> _v = <(String, int), double>{};
 
   /// 这张卡现在多出来多少高度（动画值）。
-  double of(String laneId, int row) => _v[(laneId, row)] ?? 0;
+  double of(String parallelPlaceId, int row) => _v[(parallelPlaceId, row)] ?? 0;
 
   /// 第 row 行**以上**累计多出来多少（下面的行要整体让位）。
   double padAbove(int row) {

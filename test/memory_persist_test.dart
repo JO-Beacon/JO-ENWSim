@@ -1,12 +1,10 @@
 // 记忆接线：写进弹窗的东西要真进库，重开还在。
-//
-// 以前记忆只有 load/save 方法，界面上没人调：写进去关掉就没了。
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:joenws/data/world_store.dart';
+import 'package:joenws/engine/character_memory.dart';
 import 'package:joenws/main.dart';
-import 'package:joenws/model/memory.dart';
 import 'package:joenws/theme/settings_store.dart';
 import 'package:joenws/theme/tokens.dart';
 import 'package:joenws/ui/icons.dart';
@@ -34,27 +32,65 @@ Future<void> openMemoryTab(WidgetTester t) async {
   await t.pumpAndSettle();
 }
 
+CharacterMemory note(String id, String name, String text) {
+  return CharacterMemory(
+    id: id,
+    characterId: 'char:$name',
+    text: text,
+    kind: MemoryKind.note,
+    origin: MemoryOrigin.manual,
+    createdAt: '2026-11-17T01:00:00Z',
+    updatedAt: '2026-11-17T01:00:00Z',
+  );
+}
+
 void main() {
-  test('库里的记忆能被读出来（上帝那本与角色那本都在）', () {
+  testWidgets('用户停用记忆后可逐条开启召回，保存并重开仍保持权限', (WidgetTester t) async {
+    final WorldStore worldStore = WorldStore.memory()..seedDemo();
+    addTearDown(worldStore.close);
+    final String id = worldStore.loadWorlds().worlds.first.id;
+    worldStore.saveWorldMemory(id, <CharacterMemory>[
+      note('archive-toggle', '人物1', '楼梯上有脚步。'),
+    ]);
+    await boot(t, worldStore);
+    await openMemoryTab(t);
+    await t.tap(find.descendant(of: find.byType(MemoryPanel), matching: find.text('停用')));
+    await t.pumpAndSettle();
+    expect(find.textContaining('已停用，不参与模型召回'), findsOneWidget);
+    await t.tap(find.text('保存'));
+    await t.pumpAndSettle();
+    expect(worldStore.loadWorldMemory(id).single.state, MemoryState.archived);
+    expect(worldStore.loadWorldMemory(id).single.archiveRecallable, isFalse);
+    await openMemoryTab(t);
+    await t.tap(find.text('允许召回'));
+    await t.pumpAndSettle();
+    await t.tap(find.text('保存'));
+    await t.pumpAndSettle();
+    expect(worldStore.loadWorldMemory(id).single.archiveRecallable, isTrue);
+    await openMemoryTab(t);
+    expect(find.textContaining('可按需召回'), findsOneWidget);
+    await t.tap(find.descendant(of: find.byType(MemoryPanel), matching: find.text('停用')));
+    await t.pumpAndSettle();
+    await t.tap(find.text('保存'));
+    await t.pumpAndSettle();
+    expect(worldStore.loadWorldMemory(id).single.archiveRecallable, isFalse);
+    expect(worldStore.loadMemoryVersions(id, 'archive-toggle'), hasLength(4));
+  });
+
+  test('库里的记忆能被读出来（每个角色各一本）', () {
     final WorldStore s = WorldStore.memory()..seedDemo();
     addTearDown(s.close);
     final String id = s.loadWorlds().worlds.first.id;
 
-    s.saveMemories(id, <String, MemoryBook>{
-      '': MemoryBook(
-        ownerId: '',
-        entries: <MemoryEntry>[newMemoryEntry(content: '门是插着的。')],
-      ),
-      '人物1': MemoryBook(
-        ownerId: '人物1',
-        entries: <MemoryEntry>[newMemoryEntry(content: '雨声很响。')],
-      ),
-    });
+    s.saveWorldMemory(id, <CharacterMemory>[
+      note('m1', '人物1', '门是插着的。'),
+      note('m2', '人物2', '雨声很响。'),
+    ]);
 
-    final List<MemoryBook> books = s.loadMemories(id);
-    expect(books.length, 2);
+    final List<CharacterMemory> back = s.loadWorldMemory(id);
+    expect(back.length, 2);
     expect(
-      books.firstWhere((MemoryBook b) => b.ownerId == '').entries.first.content,
+      back.firstWhere((CharacterMemory m) => m.characterId == 'char:人物1').text,
       '门是插着的。',
     );
   });
@@ -84,21 +120,20 @@ void main() {
     await t.pumpAndSettle();
 
     // 关键：不是界面上记着，是**库里**有。
-    final List<MemoryBook> books = worldStore.loadMemories(id);
-    final Iterable<MemoryEntry> all = books.expand((MemoryBook b) => b.entries);
-    expect(all.where((MemoryEntry e) => e.content == '我记得门是插着的。').length, 1);
+    final List<CharacterMemory> all = worldStore.loadWorldMemory(id);
+    expect(
+      all.where((CharacterMemory m) => m.text == '我记得门是插着的。').length,
+      1,
+    );
   });
 
   testWidgets('库里已有的记忆，打开面板就能看到（重开也在）', (WidgetTester t) async {
     final WorldStore worldStore = WorldStore.memory()..seedDemo();
     addTearDown(worldStore.close);
     final String id = worldStore.loadWorlds().worlds.first.id;
-    worldStore.saveMemories(id, <String, MemoryBook>{
-      '': MemoryBook(
-        ownerId: '',
-        entries: <MemoryEntry>[newMemoryEntry(content: '楼梯上有脚步。')],
-      ),
-    });
+    worldStore.saveWorldMemory(id, <CharacterMemory>[
+      note('m1', '人物1', '楼梯上有脚步。'),
+    ]);
 
     await boot(t, worldStore);
     await openMemoryTab(t);

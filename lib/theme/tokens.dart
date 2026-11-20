@@ -1,5 +1,7 @@
 import 'package:flutter/material.dart';
 
+import '../model/tts_types.dart';
+
 /// 设计令牌：颜色、字体、间距、形状。
 /// 不用 Material 的观感——颜色与排版全部自己定。
 @immutable
@@ -166,6 +168,16 @@ class JoShape {
   static BorderSide side(Color color) => BorderSide(color: color, width: 1);
 }
 
+enum BackgroundRunMode {
+  freeze('冻结'),
+  step('单步'),
+  round('单回合'),
+  untilStop('直到交互点/自动');
+
+  const BackgroundRunMode(this.label);
+  final String label;
+}
+
 /// 用户可配置项。
 @immutable
 class JoSettings {
@@ -174,6 +186,23 @@ class JoSettings {
     this.bodySize = 16,
     this.serifBody = true,
     this.followSystem = false,
+    this.readNarration = true,
+    this.ttsSource = TtsSource.builtin,
+    this.ttsProviderId = '',
+    this.ttsVoiceId = '0',
+    this.ttsModelId = 'melo',
+    this.ttsSpeed = 1.0,
+    this.ttsStyle = '',
+    this.ttsLifecycle = TtsLifecycle.coldStart,
+    this.builtinModelRoot = '',
+    this.proxyEnabled = false,
+    this.proxyHost = '127.0.0.1',
+    this.proxyPort = 7890,
+    this.autoRunMaxTurns = 100,
+    this.modelRequestConcurrency = 1,
+    this.backgroundRunMode = BackgroundRunMode.step,
+    this.searchMaxQueriesPerTurn = 10,
+    this.flowOpen = false,
   });
 
   final bool isDark;
@@ -189,6 +218,48 @@ class JoSettings {
 
   /// 正文用宋体（true）还是黑体（false）。
   final bool serifBody;
+
+  /// 念稿时连旁白一起念（true），还是只念对白（false）。
+  final bool readNarration;
+
+  /// 念稿用哪一类声音：内置 / 系统 / 接口。
+  final TtsSource ttsSource;
+  final String ttsProviderId;
+  final String ttsVoiceId;
+  final String ttsModelId;
+  final double ttsSpeed;
+  final String ttsStyle;
+
+  TtsPick get globalTts => TtsPick(
+    source: ttsSource,
+    providerId: ttsProviderId,
+    voiceId: ttsVoiceId,
+    modelId: ttsModelId,
+  );
+
+  /// 内置 TTS 模型的存活策略。默认完全冷启动。
+  final TtsLifecycle ttsLifecycle;
+
+  /// 内置模型根目录；空串表示用应用数据目录下的 `models`。
+  final String builtinModelRoot;
+
+  /// 网络代理：只在 `proxyEnabled` 时生效。
+  final bool proxyEnabled;
+  final String proxyHost;
+  final int proxyPort;
+
+  /// “直到交互点/自动”一次最多连续跑多少回合；到上限就停下并提示。
+  final int autoRunMaxTurns;
+
+  /// 同时在途的引擎模型请求数，所有时间线共用。
+  final int modelRequestConcurrency;
+  final BackgroundRunMode backgroundRunMode;
+
+  /// 单个回合内最多发起多少次独立搜索；1–100，默认 10。
+  final int searchMaxQueriesPerTurn;
+
+  /// 右栏回合流程图的展开状态；全局记住，不按世界分。
+  final bool flowOpen;
 
   // 注意：这里**故意不提供** `palette` 这个便利方法。
   // “实际用哪一套”得把 followSystem 也算进去，只有 main.dart 里那个
@@ -208,12 +279,48 @@ class JoSettings {
     double? bodySize,
     bool? serifBody,
     bool? followSystem,
+    bool? readNarration,
+    TtsSource? ttsSource,
+    String? ttsProviderId,
+    String? ttsVoiceId,
+    String? ttsModelId,
+    double? ttsSpeed,
+    String? ttsStyle,
+    TtsLifecycle? ttsLifecycle,
+    String? builtinModelRoot,
+    bool? proxyEnabled,
+    String? proxyHost,
+    int? proxyPort,
+    int? autoRunMaxTurns,
+    int? modelRequestConcurrency,
+    BackgroundRunMode? backgroundRunMode,
+    int? searchMaxQueriesPerTurn,
+    bool? flowOpen,
   }) {
     return JoSettings(
       isDark: isDark ?? this.isDark,
       bodySize: bodySize ?? this.bodySize,
       serifBody: serifBody ?? this.serifBody,
       followSystem: followSystem ?? this.followSystem,
+      readNarration: readNarration ?? this.readNarration,
+      ttsSource: ttsSource ?? this.ttsSource,
+      ttsProviderId: ttsProviderId ?? this.ttsProviderId,
+      ttsVoiceId: ttsVoiceId ?? this.ttsVoiceId,
+      ttsModelId: ttsModelId ?? this.ttsModelId,
+      ttsSpeed: ttsSpeed ?? this.ttsSpeed,
+      ttsStyle: ttsStyle ?? this.ttsStyle,
+      ttsLifecycle: ttsLifecycle ?? this.ttsLifecycle,
+      builtinModelRoot: builtinModelRoot ?? this.builtinModelRoot,
+      proxyEnabled: proxyEnabled ?? this.proxyEnabled,
+      proxyHost: proxyHost ?? this.proxyHost,
+      proxyPort: proxyPort ?? this.proxyPort,
+      autoRunMaxTurns: autoRunMaxTurns ?? this.autoRunMaxTurns,
+      modelRequestConcurrency:
+          modelRequestConcurrency ?? this.modelRequestConcurrency,
+      backgroundRunMode: backgroundRunMode ?? this.backgroundRunMode,
+      searchMaxQueriesPerTurn:
+          searchMaxQueriesPerTurn ?? this.searchMaxQueriesPerTurn,
+      flowOpen: flowOpen ?? this.flowOpen,
     );
   }
 }

@@ -1,235 +1,28 @@
-// LLM 调用层。
+// LLM 调用层：**按服务商分发**。
 //
-// 现在只有 **DeepSeek** 这一条（别的协议后补）。
-// 字段全部照 `AGENTS/deepseek/适配.md` 来 —— **不猜**。
+// 按 `AGENTS/服务商适配方针.md`：这里只做认领，不做转换。
+// 认出是 DeepSeek 就整个交给 `llm_deepseek.dart`（它的请求体、鉴权头、
+// 响应解析、错误码、流式都在那边）；这里不放任何 DeepSeek 的规矩。
 //
-// 还没做的：
-//   · 流式（SSE）。DeepSeek 流式时先出 delta.reasoning_content、再出 delta.content，
-//     必须按字段分流，不能当一坨文本拼。
-//   · 别的协议（OpenAI / Claude / Google）。
-//   · JSON 模式的重试（空 content）。那要等回合那层再说。
+// 共用类型在 `llm_types.dart`（结果类型允许共用）。这里 export 出去，
+// 原来 `import 'llm_client.dart'` 拿 LlmReply 的地方不用改。
+//
+// 还没搬的（下一步做，**一次一家**）：
+//   · Claude / Anthropic 兼容：body 与解析仍在本文件按 wire 分支处理；
+//   · Google：`Wire.google` 仍然直接报“还没接”。
 
 import 'dart:async';
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'llm_deepseek.dart';
+import 'llm_types.dart';
+import 'network.dart';
+
 import 'provider.dart';
 
-/// 一条消息。DeepSeek 是 **OpenAI 形状**：系统提示词在这边是
-/// `role: system` 的一条消息，不是顶层参数。
-class LlmMessage {
-  const LlmMessage(this.role, this.content);
-
-  final String role; // 'system' / 'user' / 'assistant'
-  final String content;
-
-  Map<String, String> toJson() => <String, String>{
-    'role': role,
-    'content': content,
-  };
-}
-
-/// 一次调用的输入。
-///
-/// 凡是“用户的选择”，为 null 就**不传**，让服务端用它自己的默认
-/// —— 我们不在代码里写死档位。
-class LlmRequest {
-  const LlmRequest({
-    required this.model,
-    this.messages = const <LlmMessage>[],
-    this.thinking,
-    this.effort,
-    this.temperature,
-    this.topP,
-    this.maxTokens,
-    this.jsonMode = false,
-    this.system,
-    this.webSearch = BuiltinSearch.none,
-  });
-
-  final String model;
-  final List<LlmMessage> messages;
-
-  /// 思考模式。null = 不传（DeepSeek 的默认是**开**）。
-  final bool? thinking;
-
-  /// reasoning_effort。null = 不传。
-  /// DeepSeek 会把它映射到 low / high / max 三档。
-  final String? effort;
-
-  /// 注意：**思考模式下这个被忽略，而且不报错。** 界面上必须提示。
-  final double? temperature;
-
-  /// 注意：DeepSeek 只在思考模式下用 top_p，且夹到 0.95–1.0。
-  final double? topP;
-
-  final int? maxTokens;
-
-  /// 开了要让提示词里出现 "json" 字样并给出格式示例（官方三条硬要求之二）。
-  final bool jsonMode;
-
-  /// 顶层 system。
-  ///
-  /// **Anthropic 形状**里 system 是顶层参数；OpenAI 形状没有这个位置，
-  /// 会拼成 `messages` 里一条 `role: system`。
-  final String? system;
-
-  /// 内置搜索。**形状按服务商不同**（看 `BuiltinSearch`）：
-  ///
-  /// · [BuiltinSearch.anthropic]：Anthropic 的 `web_search_20250305` server tool；
-  /// · [BuiltinSearch.mimo]：MiMo 的 `web_search` 工具（OpenAI 形状的 tools）。
-  ///
-  /// 它在**模型服务**上开关，不在搜索服务里。
-  final BuiltinSearch webSearch;
-
-  Map<String, Object?> toJson() {
-    final Map<String, Object?> body = <String, Object?>{
-      'model': model,
-      'messages': <Object?>[
-        if ((system ?? '').trim().isNotEmpty)
-          LlmMessage('system', system!.trim()).toJson(),
-        ...messages.map((LlmMessage m) => m.toJson()),
-      ],
-    };
-    final bool? think = thinking;
-    if (think != null) {
-      body['thinking'] = <String, Object?>{
-        'type': think ? 'enabled' : 'disabled',
-      };
-    }
-    if (effort != null) body['reasoning_effort'] = effort;
-    if (temperature != null) body['temperature'] = temperature;
-    if (topP != null) body['top_p'] = topP;
-    if (maxTokens != null) body['max_tokens'] = maxTokens;
-    if (jsonMode) {
-      body['response_format'] = <String, Object?>{'type': 'json_object'};
-    }
-    // MiMo 的内置搜索走的是 **OpenAI 形状的 tools**（不是 function）。
-    // 参数照 `AGENTS/docs-mimo/web-search.md`：
-    //   max_keyword 控成本（一轮最多几个关键词）、force_search = 强制搜（false = 让模型判断）、
-    //   limit 是每条来源的条数上限。
-    if (webSearch == BuiltinSearch.mimo) {
-      body['tools'] = <Object?>[
-        <String, Object?>{
-          'type': 'web_search',
-          'max_keyword': 3,
-          'force_search': false,
-          'limit': 1,
-        },
-      ];
-      body['tool_choice'] = 'auto';
-    }
-    return body;
-  }
-
-  /// Anthropic 形状（`/anthropic/messages`）。
-  ///
-  /// 差异（照 `AGENTS/docs-deepseek/guide-anthropic.md`）：
-  /// · `system` 是**顶层参数**，不放在 messages 里；
-  /// · `max_tokens` 必填（这里给个上限，调用方传了就用自己的）；
-  /// · 思考开关还是 `thinking`，但“力度”在 `output_config.effort`；
-  /// · 内置搜索是 `tools` 里一个 **server tool**（不是我们定义的 function）。
-  Map<String, Object?> toAnthropicJson() {
-    final Map<String, Object?> body = <String, Object?>{
-      'model': model,
-      'max_tokens': maxTokens ?? 4096,
-      'messages': <Object?>[
-        for (final LlmMessage m in messages)
-          if (m.role != 'system')
-            <String, Object?>{
-              'role': m.role,
-              'content': <Object?>[
-                <String, Object?>{'type': 'text', 'text': m.content},
-              ],
-            },
-      ],
-    };
-    final String sys = (system ?? '').trim();
-    if (sys.isNotEmpty) body['system'] = sys;
-    final bool? think = thinking;
-    if (think != null) {
-      body['thinking'] = <String, Object?>{
-        'type': think ? 'enabled' : 'disabled',
-      };
-    }
-    if (effort != null) {
-      body['output_config'] = <String, Object?>{'effort': effort};
-    }
-    if (temperature != null) body['temperature'] = temperature;
-    if (topP != null) body['top_p'] = topP;
-    if (webSearch == BuiltinSearch.anthropic) {
-      body['tools'] = <Object?>[
-        <String, Object?>{
-          // Anthropic 的 server tool 写法。DeepSeek 文档只写了
-          // “`server_tool_use` / `web_search_tool_result` 支持”，
-          // 没写声明长什么样，所以先按 Anthropic 官方那种声明。
-          'type': 'web_search_20250305',
-          'name': 'web_search',
-          'max_uses': 5,
-        },
-      ];
-    }
-    return body;
-  }
-}
-
-/// 用量。DeepSeek 的缓存命中与未命中要**分开看**——命中价差 50 倍。
-class LlmUsage {
-  const LlmUsage({
-    this.input = 0,
-    this.output = 0,
-    this.cacheHit = 0,
-    this.cacheMiss = 0,
-  });
-
-  final int input;
-  final int output;
-  final int cacheHit;
-  final int cacheMiss;
-}
-
-/// 内置搜索捞到的一条来源（Anthropic 形状的 `web_search_result`）。
-class LlmSource {
-  const LlmSource({required this.title, required this.url});
-
-  final String title;
-  final String url;
-}
-
-/// 一次调用的结果。
-class LlmReply {
-  const LlmReply({
-    this.text = '',
-    this.reasoning,
-    this.usage,
-    this.error,
-    this.errorCode,
-    this.sources = const <LlmSource>[],
-    this.searches = 0,
-  });
-
-  final String text;
-
-  /// DeepSeek 把思维链放在和 content **同级**的 reasoning_content 里。
-  final String? reasoning;
-
-  final LlmUsage? usage;
-
-  /// 内置搜索返回的来源（只有 Anthropic 形状有；没开就是空）。
-  final List<LlmSource> sources;
-
-  /// 这次模型自己搜了几次（`server_tool_use` 的个数）。
-  final int searches;
-
-  /// 出错时给人看的一句话；没错就是 null。
-  final String? error;
-
-  /// HTTP 状态码（不是 HTTP 错就没有）。
-  final int? errorCode;
-
-  bool get ok => error == null;
-}
+export 'llm_types.dart';
 
 /// 调用层。
 class LlmClient {
@@ -240,7 +33,8 @@ class LlmClient {
 
   /// 发一次（非流式）。
   ///
-  /// 现在只认 [Protocol.deepseek]。别的协议返回一句“还没接”，
+  /// **DeepSeek 整个交给 `llm_deepseek.dart`**（它有自己的一份重试与错误码表）。
+  /// 其余协议暂时仍走本文件的分支；认不出的协议返回一句“还没接”，
   /// **不假装能发**。
   static Future<LlmReply> send(
     Provider provider,
@@ -248,8 +42,11 @@ class LlmClient {
     LlmRequest req, {
     http.Client? client,
   }) async {
+    if (provider.protocol.isDeepSeek) {
+      return DeepSeekLlm.send(provider, apiKey, req, client: client);
+    }
     final Wire wire = provider.protocol.wire;
-    if (wire != Wire.openai && wire != Wire.anthropic) {
+    if (wire != Wire.chatCompletions && wire != Wire.anthropic) {
       return LlmReply(error: '这个协议还没接：${provider.protocol.label}');
     }
     // 内置搜索的形状得跟协议对得上，否则发了也是无效参数。
@@ -257,7 +54,7 @@ class LlmClient {
       if (req.webSearch == BuiltinSearch.anthropic && wire != Wire.anthropic) {
         return const LlmReply(error: 'Anthropic 的内置搜索只能用在 Anthropic 格式的服务商上');
       }
-      if (req.webSearch == BuiltinSearch.mimo && wire != Wire.openai) {
+      if (req.webSearch == BuiltinSearch.mimo && wire != Wire.chatCompletions) {
         return const LlmReply(
           error: 'MiMo 的内置搜索只在 OpenAI 格式（chat/completions）下支持',
         );
@@ -289,13 +86,13 @@ class LlmClient {
       http.Response? res;
       String? netError;
       try {
-        res = await (client ?? http.Client())
+        res = await (client ?? NetworkRuntime.newClient())
             .post(uri, headers: headers, body: payload)
             .timeout(const Duration(minutes: 5));
       } on TimeoutException {
         netError = '超时（5 分钟没有响应）';
       } catch (e) {
-        netError = '连不上：$e';
+        netError = '连接失败：$e';
       }
 
       if (res == null) {
@@ -328,7 +125,10 @@ class LlmClient {
     return const LlmReply(error: '重试了几次都不行');
   }
 
-  /// 把成功返回解析出来。字段名照 DeepSeek 的文档。
+  /// 把成功返回解析出来。字段名照 Chat Completions 形状。
+  ///
+  /// 这是**还没搬走**的通用路径（MiMo 等 OpenAI 兼容服务商用）。
+  /// DeepSeek 有自己的解析，在 `llm_deepseek.dart`。
   static LlmReply _parseOk(String body) {
     try {
       final Object? j = jsonDecode(body);
@@ -343,27 +143,57 @@ class LlmClient {
 
       final String text = '${msg['content'] ?? ''}';
       final Object? rc = msg['reasoning_content'];
-      // 内置搜索的来源：MiMo 把引用放在 `message.annotations`（url_citation）。
-      final List<LlmSource> sources = <LlmSource>[];
-      final Object? ann = msg['annotations'];
-      if (ann is List) {
-        for (final Object? a in ann) {
-          if (a is! Map) continue;
-          if ('${a['type']}' != 'url_citation') continue;
-          sources.add(
-            LlmSource(title: '${a['title'] ?? ''}', url: '${a['url'] ?? ''}'),
-          );
-        }
-      }
+      // 内置搜索的引用放在 `message.annotations`（url_citation）。
+      // MiMo 是这样；DeepSeek 的联网工具也返回 annotations，但那边走
+      // `llm_deepseek.dart` 自己的解析。
       return LlmReply(
         text: text,
         reasoning: rc is String && rc.isNotEmpty ? rc : null,
         usage: _usageOf(j['usage']),
-        sources: sources,
+        sources: _sourcesOf(msg['annotations']),
+        searches: _serverToolCallsOf(msg['server_tool_calls']),
+        toolCalls: _toolCallsOf(msg['tool_calls']),
       );
     } catch (e) {
       return LlmReply(error: '解析失败：$e');
     }
+  }
+
+  /// 解析 Chat Completions 形状的 `annotations` 来源；兼容 `url_citation` 嵌套形状。
+  static List<LlmSource> _sourcesOf(Object? raw) {
+    if (raw is! List) return const <LlmSource>[];
+    final List<LlmSource> out = <LlmSource>[];
+    for (final Object? a in raw) {
+      if (a is! Map) continue;
+      final Object? nested = a['url_citation'];
+      if (nested == null && '${a['type'] ?? ''}' != 'url_citation') continue;
+      final Map<Object?, Object?> citation = nested is Map ? nested : a;
+      final String url = '${citation['url'] ?? ''}';
+      if (url.isEmpty) continue;
+      out.add(
+        LlmSource(
+          title: '${citation['title'] ?? ''}',
+          url: url,
+        ),
+      );
+    }
+    return out;
+  }
+
+  /// 统计 Chat Completions 形状的 `server_tool_calls` 里实际发起的调用数。
+  static int _serverToolCallsOf(Object? raw) {
+    if (raw is! List) return 0;
+    int count = 0;
+    for (final Object? group in raw) {
+      if (group is! Map) continue;
+      final Object? calls = group['calls'];
+      if (calls is List) {
+        count += calls.length;
+      } else if ('${group['type'] ?? ''}'.isNotEmpty) {
+        count++;
+      }
+    }
+    return count;
   }
 
   /// Anthropic 形状的响应。
@@ -385,6 +215,7 @@ class LlmClient {
       final StringBuffer text = StringBuffer();
       final StringBuffer think = StringBuffer();
       final List<LlmSource> sources = <LlmSource>[];
+      final List<LlmToolCall> toolCalls = <LlmToolCall>[];
       int searches = 0;
 
       for (final Object? b in content) {
@@ -396,6 +227,17 @@ class LlmClient {
             think.write('${b['thinking'] ?? ''}');
           case 'server_tool_use':
             searches++;
+          case 'tool_use':
+            final String toolName = '${b['name'] ?? ''}';
+            if (toolName.isNotEmpty) {
+              toolCalls.add(
+                LlmToolCall(
+                  id: '${b['id'] ?? ''}',
+                  name: toolName,
+                  arguments: jsonEncode(b['input'] ?? const <String, Object?>{}),
+                ),
+              );
+            }
           case 'web_search_tool_result':
             final Object? inner = b['content'];
             if (inner is List) {
@@ -418,6 +260,7 @@ class LlmClient {
         usage: _anthropicUsage(j['usage']),
         sources: sources,
         searches: searches,
+        toolCalls: toolCalls,
       );
     } catch (e) {
       return LlmReply(error: '解析失败：$e');
@@ -447,7 +290,33 @@ class LlmClient {
     );
   }
 
-  /// 错误码 → 人话。照 `适配.md` 那张表。
+  /// 客户端工具调用。Chat Completions 形状里参数是 **JSON 字符串**，原样保留。
+  ///
+  /// 这里照着通用路径再写一份：DeepSeek 那份在 `llm_deepseek.dart`，
+  /// 按方针各写各的，不为了少几行去共用。
+  static List<LlmToolCall> _toolCallsOf(Object? raw) {
+    if (raw is! List) return const <LlmToolCall>[];
+    final List<LlmToolCall> out = <LlmToolCall>[];
+    for (final Object? t in raw) {
+      if (t is! Map) continue;
+      final Object? fn = t['function'];
+      if (fn is! Map) continue;
+      final String name = '${fn['name'] ?? ''}';
+      if (name.isEmpty) continue;
+      out.add(
+        LlmToolCall(
+          id: '${t['id'] ?? ''}',
+          name: name,
+          arguments: '${fn['arguments'] ?? ''}',
+        ),
+      );
+    }
+    return out;
+  }
+
+  /// 错误码 → 人话（通用路径用）。
+  ///
+  /// **DeepSeek 不用这张表**：它有自己那份（含 402），在 `llm_deepseek.dart`。
   static String _messageFor(int code, String body) {
     String? detail;
     try {
@@ -473,19 +342,23 @@ class LlmClient {
         : 'HTTP $code：$what\n$detail';
   }
 
-  /// 流式的一块。
+  /// 流式。
   ///
-  /// DeepSeek 先出 [reasoningDelta]（思考），再出 [textDelta]（正文）——
-  /// 解析时必须按字段分流，不能当一坨文本拼。
+  /// **DeepSeek 整个交给 `llm_deepseek.dart`**；其余协议暂时走本文件，
+  /// 且只做了 Chat Completions 形状。Anthropic 形状的流式事件形状不一样
+  /// （message_start / content_block_delta…），**没做就直说**，
+  /// 不拿 OpenAI 的解析器去套。
   static Stream<LlmChunk> stream(
     Provider provider,
     String apiKey,
-    LlmRequest req,
-  ) async* {
-    // 流式只做了 OpenAI 形状（DeepSeek 的 chat/completions）。
-    // Anthropic 形状的流式事件形状不一样（message_start / content_block_delta…），
-    // **没做就直说**，不拿 OpenAI 的解析器去套。
-    if (provider.protocol.wire != Wire.openai) {
+    LlmRequest req, {
+    http.Client? client,
+  }) async* {
+    if (provider.protocol.isDeepSeek) {
+      yield* DeepSeekLlm.stream(provider, apiKey, req, client: client);
+      return;
+    }
+    if (provider.protocol.wire != Wire.chatCompletions) {
       yield LlmChunk(error: '${provider.protocol.label} 的流式还没接（先支持非流式）');
       return;
     }
@@ -502,7 +375,7 @@ class LlmClient {
     });
 
     // 流式**不做退避重试** —— 断在半路重试会把已经吐出来的字重复一遍。
-    final http.Client client = http.Client();
+    final http.Client httpClient = client ?? NetworkRuntime.newClient();
     try {
       final http.Request r = http.Request('POST', uri)
         ..headers.addAll(<String, String>{
@@ -511,7 +384,7 @@ class LlmClient {
         })
         ..body = payload;
 
-      final http.StreamedResponse res = await client.send(r);
+      final http.StreamedResponse res = await httpClient.send(r);
       if (res.statusCode != 200) {
         final String body = await res.stream.bytesToString();
         yield LlmChunk(error: _messageFor(res.statusCode, body));
@@ -544,6 +417,8 @@ class LlmClient {
 
           String t = '';
           String rc = '';
+          List<LlmSource> sources = const <LlmSource>[];
+          int searches = 0;
           final Object? ch = j['choices'];
           if (ch is List && ch.isNotEmpty && ch.first is Map) {
             final Object? d = (ch.first as Map)['delta'];
@@ -552,10 +427,19 @@ class LlmClient {
               final Object? dR = d['reasoning_content'];
               if (dT is String) t = dT;
               if (dR is String) rc = dR;
+              sources = _sourcesOf(d['annotations']);
+              searches = _serverToolCallsOf(d['server_tool_calls']);
             }
           }
-          if (t.isNotEmpty || rc.isNotEmpty || u != null) {
-            yield LlmChunk(textDelta: t, reasoningDelta: rc, usage: u);
+          if (t.isNotEmpty || rc.isNotEmpty || u != null ||
+              sources.isNotEmpty || searches > 0) {
+            yield LlmChunk(
+              textDelta: t,
+              reasoningDelta: rc,
+              usage: u,
+              sources: sources,
+              searches: searches,
+            );
           }
         } catch (_) {
           // 某一块解析不了就跳过，不因为一块把整条流打断。
@@ -564,31 +448,7 @@ class LlmClient {
     } catch (e) {
       yield LlmChunk(error: '流断了：$e');
     } finally {
-      client.close();
+      httpClient.close();
     }
   }
-}
-
-/// 流式返回的一块。
-class LlmChunk {
-  const LlmChunk({
-    this.textDelta = '',
-    this.reasoningDelta = '',
-    this.usage,
-    this.error,
-  });
-
-  /// 正文新增的一小段。
-  final String textDelta;
-
-  /// 思考内容新增的一小段。DeepSeek 会在正文之前先吐这个。
-  final String reasoningDelta;
-
-  /// 有用量时才有（通常只有最后一块带）。
-  final LlmUsage? usage;
-
-  /// 出错时的一句话。出现这个就意味着流到此为止。
-  final String? error;
-
-  bool get ok => error == null;
 }

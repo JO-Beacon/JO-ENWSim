@@ -1,9 +1,14 @@
+import 'dart:io';
+
 import 'package:flutter/material.dart';
+import 'package:path_provider/path_provider.dart';
 
 import '../model/search_api.dart';
 import '../model/provider.dart';
 import '../model/provider_api.dart';
+import '../model/tts_api.dart';
 import '../theme/tokens.dart';
+import '../tts/tts_file.dart';
 import 'add_provider_dialog.dart';
 import 'common.dart';
 import 'tooltip.dart';
@@ -16,16 +21,20 @@ class ProviderPanel extends StatefulWidget {
     required this.onChanged,
     this.presets = kProviderPresets,
     this.note,
+    this.headerText,
   });
 
   final List<Provider> providers;
   final ValueChanged<List<Provider>> onChanged;
 
-  /// “添加”弹窗里给哪一套预设（模型 / 搜索 / 语音各不相同）。
+  /// “添加”弹窗里给哪一套预设（模型 / 搜索 / TTS 各不相同）。
   final List<ProviderPreset> presets;
 
   /// 存档读不出来时的提示语。如实显示，不藏也不假装没有。
   final String? note;
+
+  /// 搜索框上方的一行可选小字（服务类面板用）。
+  final String? headerText;
 
   @override
   State<ProviderPanel> createState() => _ProviderPanelState();
@@ -38,6 +47,12 @@ class _ProviderPanelState extends State<ProviderPanel> {
 
   /// 行内展开了参数的模型（按对象身份记；替换时会跟着换）。
   final Set<ModelRef> _openModels = <ModelRef>{};
+
+  /// TTS 试合成的输入与结果（只在 TTS 服务里用）。
+  String _ttsText = '';
+  String _ttsStatus = '';
+  String _ttsStatusFor = '';
+  bool _ttsBusy = false;
 
   @override
   void dispose() {
@@ -147,7 +162,7 @@ class _ProviderPanelState extends State<ProviderPanel> {
 
   Widget _empty(JoPalette p) => Center(
     child: Text(
-      '还没有服务商，点左下角“＋ 添加”',
+      '还没有服务商；可在左下角添加。',
       style: JoFonts.meta.copyWith(color: p.secondary),
     ),
   );
@@ -157,6 +172,23 @@ class _ProviderPanelState extends State<ProviderPanel> {
   Widget _left(JoPalette p) {
     return Column(
       children: <Widget>[
+        if (widget.headerText != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(
+              JoSpace.s3,
+              JoSpace.s2,
+              JoSpace.s3,
+              0,
+            ),
+            child: Text(
+              widget.headerText!,
+              style: JoFonts.meta.copyWith(
+                color: p.secondary,
+                fontSize: 10,
+                height: 1.6,
+              ),
+            ),
+          ),
         Padding(
           padding: const EdgeInsets.fromLTRB(
             JoSpace.s3,
@@ -409,7 +441,7 @@ class _ProviderPanelState extends State<ProviderPanel> {
               // 搜索类服务：直接在这里试搜一条，能看到到底通不通。
               if (x.kind == ServiceKind.search) ...<Widget>[
                 const SizedBox(height: JoSpace.s5),
-                _label(p, '试搜一下'),
+                _label(p, '搜索测试'),
                 _SearchTry(palette: p, provider: x),
               ],
               const SizedBox(height: JoSpace.s5),
@@ -453,43 +485,19 @@ class _ProviderPanelState extends State<ProviderPanel> {
                 // 形状因家而异，提示词说清楚是哪一种，不拿一套话套所有人。
                 _note(p, switch (x.builtinSearchShape) {
                   BuiltinSearch.anthropic =>
-                    '模型自己决定搜不搜，服务端执行（Anthropic 的 web_search）。'
-                        '服务端搜的那几次会打到 Search / Fetch：2026-11-01 前免费，'
-                        '之后按 \$0.75 / 1000 次计。',
+                    '由模型决定是否搜索，检索在服务端执行（Anthropic 的 web_search）。',
                   BuiltinSearch.mimo =>
-                    '模型自己判断要不要搜（可强制）；需要先在 MiMo 控制台'
-                        '开通“联网服务插件”，按插件调用计费。'
-                        '一轮最多 3 个关键词（max_keyword），用来控成本。',
+                    '由模型判断是否搜索（也可强制搜索）；需先在 MiMo 控制台'
+                        '开通“联网服务插件”。'
+                        '每轮最多 3 个关键词。',
+                  BuiltinSearch.deepseek =>
+                    '由模型决定是否搜索，检索在服务端执行，'
+                        '并同时启用链接阅读。',
                   BuiltinSearch.none => '',
                 }),
               ],
-              if (x.kind == ServiceKind.model &&
-                  x.protocol.wire == Wire.openai &&
-                  x.custom == null) ...<Widget>[
-                const SizedBox(height: JoSpace.s4),
-                Row(
-                  children: <Widget>[
-                    Expanded(
-                      child: Text(
-                        'Use Responses API',
-                        style: JoFonts.ui.copyWith(fontSize: 13, color: p.text),
-                      ),
-                    ),
-                    JoToggle(
-                      on: x.useResponsesApi,
-                      onChanged: (bool v) =>
-                          _replace(x.copyWith(useResponsesApi: v)),
-                    ),
-                  ],
-                ),
-                _note(
-                  p,
-                  '改用 Responses 接口而不是 chat/completions；'
-                  '服务商不支持时保持关闭',
-                ),
-              ],
               // 端点格式、缓存计价、峰谷价目 —— 全是**聊天接口**才有的事，
-              // 搜索/语音服务没有这些。
+              // 搜索/TTS 服务没有这些。
               if (x.kind == ServiceKind.model &&
                   x.protocol.isDeepSeek) ...<Widget>[
                 const SizedBox(height: JoSpace.s6),
@@ -498,9 +506,9 @@ class _ProviderPanelState extends State<ProviderPanel> {
               const SizedBox(height: JoSpace.s6),
               if (x.kind == ServiceKind.model)
                 _models(p, x)
-              else if (x.kind == ServiceKind.voice)
+              else if (x.kind == ServiceKind.tts)
                 // 音色：定义在服务里，引用在角色上。
-                _voices(p),
+                _voices(p, x),
               // 搜索服务只要把服务本身配好就行（全局一层，没有引用层级），
               // 所以底下不再挂任何清单。
               const SizedBox(height: JoSpace.s6),
@@ -521,18 +529,177 @@ class _ProviderPanelState extends State<ProviderPanel> {
 
   /// 音色清单：定义在服务里（有哪些音色），引用在角色上（谁用哪个）。
   ///
-  /// 表头先摆出来，条目结构与属性（语言 / 性别 / 风格）等定了再填。
-  Widget _voices(JoPalette p) => Column(
-    crossAxisAlignment: CrossAxisAlignment.stretch,
-    children: <Widget>[
-      _label(p, '音色 0'),
-      Text(
-        '音色定义在服务里，角色那边只存“用哪个”。'
-        '条目属性（语言 / 性别 / 风格之类）还没定，定完就照模型清单的样子做。',
-        style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+  /// 只列**已知形状**的那些服务商；没接的那几家如实写“不知道”。
+  Widget _voices(JoPalette p, Provider x) {
+    final TtsService tts = TtsService(x);
+    final List<TtsVoice> voices = tts.voices;
+    final String status = _ttsStatusFor == x.id ? _ttsStatus : '';
+    if (voices.isEmpty) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          _label(p, '音色 0'),
+          Text(
+            '该服务商的 TTS 接口尚未接入，暂时无法读取音色清单。',
+            style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+          ),
+        ],
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(child: _label(p, '音色 ${voices.length}')),
+            JoButton(
+              text: '编辑音色',
+              bordered: true,
+              onTap: () => _editVoices(x),
+            ),
+          ],
+        ),
+        for (final TtsVoice v in voices)
+          Padding(
+            padding: const EdgeInsets.only(bottom: JoSpace.s2),
+            child: Row(
+              children: <Widget>[
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    v.name,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: JoFonts.ui.copyWith(fontSize: 13, color: p.text),
+                  ),
+                ),
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    v.id,
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: JoFonts.meta.copyWith(color: p.secondary),
+                  ),
+                ),
+                Expanded(
+                  flex: 2,
+                  child: Text(
+                    <String>[
+                      v.language,
+                      v.gender,
+                    ].where((String s) => s.trim().isNotEmpty).join(' · '),
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: JoFonts.meta.copyWith(color: p.secondary),
+                  ),
+                ),
+              ],
+            ),
+          ),
+        Text(
+          '音色在服务商中定义，角色设置只保存所选音色。',
+          style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+        ),
+        const SizedBox(height: JoSpace.s3),
+        JoInput(
+          initial: '',
+          hint: '输入测试文本，用于试合成',
+          onChanged: (String v) => _ttsText = v,
+        ),
+        const SizedBox(height: JoSpace.s2),
+        Row(
+          children: <Widget>[
+            JoButton(
+              text: _ttsBusy ? '合成中…' : '合成并保存',
+              bordered: true,
+              onTap: () {
+                if (!_ttsBusy) _testTts(x);
+              },
+            ),
+            const SizedBox(width: JoSpace.s3),
+            Expanded(
+              child: Text(
+                status,
+                maxLines: 2,
+                overflow: TextOverflow.ellipsis,
+                style: JoFonts.meta.copyWith(
+                  color: status.startsWith('已保存') ? p.accent : p.secondary,
+                ),
+              ),
+            ),
+          ],
+        ),
+        const SizedBox(height: JoSpace.s1),
+        Text(
+          '试合成会先用默认音色；音频保存为文件，路径显示在按钮右侧。',
+          style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
+        ),
+      ],
+    );
+  }
+
+  Future<void> _editVoices(Provider x) async {
+    final List<TtsVoice> current = x.voices.isNotEmpty
+        ? x.voices
+        : TtsService(x).voices;
+    final JoPalette p = JoTheme.of(context);
+    final List<TtsVoice>? next = await showDialog<List<TtsVoice>>(
+      context: context,
+      builder: (BuildContext c) => JoTheme(
+        settings: const JoSettings(),
+        palette: p,
+        child: _VoiceEditorDialog(initial: current),
       ),
-    ],
-  );
+    );
+    if (next == null || !mounted) return;
+    _replace(x.copyWith(voices: next));
+  }
+
+  /// 试合成一句：走 [TtsService] 真实的接口，成功后存成文件。
+  ///
+  /// 这里只是设置页的自检入口；画布上的朗读在 workspace 里。
+  Future<void> _testTts(Provider x) async {
+    final String text = _ttsText.trim();
+    if (text.isEmpty) {
+      setState(() {
+        _ttsStatusFor = x.id;
+        _ttsStatus = '还没有输入要念的话。';
+      });
+      return;
+    }
+    setState(() {
+      _ttsStatusFor = x.id;
+      _ttsBusy = true;
+      _ttsStatus = '合成中…';
+    });
+    final TtsResult r = await TtsService(x).synthesize(text);
+    if (!mounted) return;
+    if (!r.ok) {
+      setState(() {
+        _ttsBusy = false;
+        _ttsStatus = r.message;
+      });
+      return;
+    }
+    try {
+      final Directory dir = Directory(
+        '${(await getApplicationSupportDirectory()).path}/tts',
+      );
+      final String path = await saveTtsAudio(r, directory: dir);
+      if (!mounted) return;
+      setState(() {
+        _ttsBusy = false;
+        _ttsStatus = '已保存：$path';
+      });
+    } catch (e) {
+      if (!mounted) return;
+      setState(() {
+        _ttsBusy = false;
+        _ttsStatus = '保存失败：$e';
+      });
+    }
+  }
 
   /// DeepSeek 专属开关。
   ///
@@ -557,7 +724,6 @@ class _ProviderPanelState extends State<ProviderPanel> {
             'POST ${base.isEmpty ? 'https://api.deepseek.com' : base}/v1/tools/fetch',
             style: JoFonts.meta.copyWith(color: p.text),
           ),
-          _note(p, '两个端点各自计费：\$0.75 / 1000 次（成功才计）。'),
         ];
       case SearchVendor.tavily:
         return <Widget>[
@@ -570,7 +736,6 @@ class _ProviderPanelState extends State<ProviderPanel> {
             'POST ${base.isEmpty ? 'https://api.tavily.com' : base}/extract',
             style: JoFonts.meta.copyWith(color: p.text),
           ),
-          _note(p, '按 API Credit 计费：basic 1 个、advanced 2 个。'),
         ];
       case SearchVendor.unknown:
         return <Widget>[
@@ -579,23 +744,29 @@ class _ProviderPanelState extends State<ProviderPanel> {
             hint: '服务地址',
             onChanged: (String v) => _replace(x.copyWith(baseUrl: v)),
           ),
-          _note(p, '这家搜索接口还没接：只知道地址，不知道请求形状。'),
+          _note(p, '接口尚未接入，暂时只能保存地址。'),
         ];
     }
   }
 
   List<Widget> _deepseek(JoPalette p, Provider x) => <Widget>[
     _label(p, '端点格式'),
+    // 三种格式是**并列**的端点，不是开关：选哪个就走哪个的请求体与解析。
     JoSegment<String>(
       options: const <({String label, String value})>[
-        (label: 'OpenAI 格式', value: 'openai'),
+        (label: 'Chat Completions 格式', value: 'chat'),
+        (label: 'Responses 格式', value: 'responses'),
         (label: 'Anthropic 格式', value: 'anthropic'),
       ],
-      value: x.protocol == Protocol.deepseekAnthropic ? 'anthropic' : 'openai',
+      value: x.protocol == Protocol.deepseekAnthropic
+          ? 'anthropic'
+          : (x.protocol == Protocol.deepseekResponses ? 'responses' : 'chat'),
       onChanged: (String v) {
-        final Protocol next = v == 'anthropic'
-            ? Protocol.deepseekAnthropic
-            : Protocol.deepseek;
+        final Protocol next = switch (v) {
+          'anthropic' => Protocol.deepseekAnthropic,
+          'responses' => Protocol.deepseekResponses,
+          _ => Protocol.deepseek,
+        };
         _replace(
           x.copyWith(
             protocol: next,
@@ -617,7 +788,7 @@ class _ProviderPanelState extends State<ProviderPanel> {
   /// 模型行点开后展开的内容。
   ///
   /// **只显示能力声明**——那是客观事实，不是给用户调的东西。
-  /// 采样策略、思考档位这类“选择”不在这儿（它们跟着角色，进聊天栏）。
+  /// 采样策略、思考档位这类“选择”不在这儿（它们跟着角色，在行动输入框旁）。
   Widget _modelParams(JoPalette p, Provider x, ModelRef m) {
     final ModelCaps? c = m.caps;
     return Container(
@@ -630,7 +801,7 @@ class _ProviderPanelState extends State<ProviderPanel> {
       ),
       child: c == null
           ? Text(
-              '用户自己加的模型，我们不知道它是什么，所以没有能力声明。',
+              '该模型没有能力声明，下面只显示通用参数。',
               style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
             )
           : Column(
@@ -788,7 +959,7 @@ class _ProviderPanelState extends State<ProviderPanel> {
       children: <Widget>[
         Row(
           children: <Widget>[
-            _label(p, '一共有 ${x.models.length} 个模型'),
+            _label(p, '共 ${x.models.length} 个模型'),
             const Spacer(),
             JoButton(
               text: '＋ 添加模型',
@@ -825,7 +996,7 @@ class _ProviderPanelState extends State<ProviderPanel> {
           Padding(
             padding: const EdgeInsets.only(top: JoSpace.s2),
             child: Text(
-              '还没有模型。点“获取模型”从接口拉一份，或者手动加。',
+              '还没有模型；可从接口获取，或手动添加。',
               style: JoFonts.meta.copyWith(color: p.secondary),
             ),
           ),
@@ -1016,7 +1187,7 @@ class _ConfirmDeleteDialog extends StatelessWidget {
             ),
             const SizedBox(height: JoSpace.s3),
             Text(
-              '“$name” 连同它下面的模型与 API Key 一起删掉，不能撤销。',
+              '“$name”及其下的模型与 API Key 将一并删除，且无法恢复。',
               style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
             ),
             const SizedBox(height: JoSpace.s4),
@@ -1180,7 +1351,7 @@ class _KeyFieldState extends State<_KeyField> {
               ),
             ),
             const SizedBox(width: JoSpace.s3),
-            // 搜索 / 语音这类没有“模型列表”可拉，探测按钮对它们没意义。
+            // 搜索 / TTS 这类没有“模型列表”可拉，探测按钮对它们没意义。
             if (widget.provider.kind == ServiceKind.model)
               // 只看通不通：不发拉列表那一步，不动配置。
               _ProbeButton(
@@ -1343,7 +1514,7 @@ class _RenameGroupDialogState extends State<_RenameGroupDialog> {
             ),
             const SizedBox(height: JoSpace.s2),
             Text(
-              '组里的服务商一起改名。留空 = 拆成未分组。',
+              '组内服务商会一起改名；留空则拆分为未分组。',
               style: JoFonts.meta.copyWith(color: p.secondary),
             ),
             const SizedBox(height: JoSpace.s4),
@@ -1373,7 +1544,7 @@ class _RenameGroupDialogState extends State<_RenameGroupDialog> {
 /// 目前只有 DeepSeek 的 Search / Fetch **真接了**（`deepseek_search.dart`）；
 /// 别的厂商请求形状各不相同，没接之前就如实说明，不假装能跑。
 ///
-/// 提醒：这两个接口按**成功次数**计费（$0.75 / 1000 次），所以这里不自动跑，
+/// 提醒：这两个接口按**成功次数**计费，所以这里不自动跑，
 /// 点了才发一次。
 class _SearchTry extends StatefulWidget {
   const _SearchTry({required this.palette, required this.provider});
@@ -1417,10 +1588,9 @@ class _SearchTryState extends State<_SearchTry> {
   @override
   Widget build(BuildContext context) {
     final JoPalette p = widget.palette;
-    final SearchVendor vendor = SearchService(widget.provider).vendor;
     if (!_supported) {
       return Text(
-        '这个服务商的搜索接口还没接。目前只接了 DeepSeek 的 Search / Fetch '
+        '该服务商的搜索接口尚未接入；当前支持 DeepSeek 的 Search / Fetch '
         '和 Tavily 的 Search / Extract。',
         style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
       );
@@ -1435,7 +1605,7 @@ class _SearchTryState extends State<_SearchTry> {
               child: JoTextField(
                 controller: _q,
                 style: JoFonts.ui.copyWith(fontSize: 13, color: p.text),
-                hint: '搜什么',
+                hint: '输入搜索关键词',
                 hintStyle: JoFonts.ui.copyWith(
                   fontSize: 13,
                   color: p.secondary,
@@ -1445,7 +1615,7 @@ class _SearchTryState extends State<_SearchTry> {
             ),
             const SizedBox(width: JoSpace.s3),
             JoButton(
-              text: _busy ? '搜索中' : '搜',
+              text: _busy ? '搜索中…' : '搜索',
               color: p.accent,
               onTap: _busy ? () {} : _run,
             ),
@@ -1453,13 +1623,7 @@ class _SearchTryState extends State<_SearchTry> {
         ),
         const SizedBox(height: JoSpace.s2),
         Text(
-          // 计费口径按厂商分开：DeepSeek 按次、Tavily 按 credit。
-          switch (vendor) {
-            SearchVendor.deepseek => '按次计费：\$0.75 / 1000 次（成功才计）。点了才发，不会自己跑。',
-            SearchVendor.tavily =>
-              '按 API Credit 计费（basic 1 个、advanced 2 个）。点了才发，不会自己跑。',
-            SearchVendor.unknown => '点了才发，不会自己跑。',
-          },
+          '仅在点击后发起，不会自动执行。',
           style: JoFonts.meta.copyWith(color: p.secondary, fontSize: 10),
         ),
         if (out != null) ...<Widget>[
@@ -1488,6 +1652,231 @@ class _SearchTryState extends State<_SearchTry> {
           ],
         ],
       ],
+    );
+  }
+}
+
+class _VoiceDraft {
+  _VoiceDraft({TtsVoice? voice})
+    : id = TextEditingController(text: voice?.id ?? ''),
+      name = TextEditingController(text: voice?.name ?? ''),
+      language = TextEditingController(text: voice?.language ?? ''),
+      gender = TextEditingController(text: voice?.gender ?? ''),
+      networkRequired = voice?.networkRequired ?? false;
+
+  final TextEditingController id;
+  final TextEditingController name;
+  final TextEditingController language;
+  final TextEditingController gender;
+  bool networkRequired;
+
+  TtsVoice? toVoice() {
+    final String voiceId = id.text.trim();
+    if (voiceId.isEmpty) return null;
+    final String voiceName = name.text.trim();
+    return TtsVoice(
+      id: voiceId,
+      name: voiceName.isEmpty ? voiceId : voiceName,
+      language: language.text.trim(),
+      gender: gender.text.trim(),
+      networkRequired: networkRequired,
+    );
+  }
+
+  void dispose() {
+    id.dispose();
+    name.dispose();
+    language.dispose();
+    gender.dispose();
+  }
+}
+
+/// 音色清单编辑：服务商没有列表接口，这里改的是本地清单。
+class _VoiceEditorDialog extends StatefulWidget {
+  const _VoiceEditorDialog({required this.initial});
+
+  final List<TtsVoice> initial;
+
+  @override
+  State<_VoiceEditorDialog> createState() => _VoiceEditorDialogState();
+}
+
+class _VoiceEditorDialogState extends State<_VoiceEditorDialog> {
+  late final List<_VoiceDraft> _rows = widget.initial
+      .map((TtsVoice v) => _VoiceDraft(voice: v))
+      .toList();
+
+  @override
+  void dispose() {
+    for (final _VoiceDraft row in _rows) {
+      row.dispose();
+    }
+    super.dispose();
+  }
+
+  @override
+  Widget build(BuildContext context) {
+    final JoPalette p = JoTheme.of(context);
+    return Dialog(
+      backgroundColor: Colors.transparent,
+      child: Container(
+        width: 760,
+        height: 580,
+        padding: const EdgeInsets.all(JoSpace.s5),
+        decoration: BoxDecoration(
+          color: p.bg,
+          border: JoShape.border(p.border),
+          borderRadius: JoShape.br,
+        ),
+        child: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: Text(
+                    '音色清单',
+                    style: JoFonts.ui.copyWith(
+                      fontSize: 16,
+                      fontWeight: FontWeight.w700,
+                      color: p.text,
+                    ),
+                  ),
+                ),
+                JoButton(
+                  text: '关闭',
+                  bordered: true,
+                  onTap: () => Navigator.of(context).pop(),
+                ),
+              ],
+            ),
+            const SizedBox(height: JoSpace.s2),
+            Text(
+              '该服务商未提供音色列表接口；此处为本地清单，修改后即用于音色选择。'
+              '“恢复预设”会清空本地清单并恢复内置预设。',
+              style: JoFonts.meta.copyWith(color: p.secondary, height: 1.7),
+            ),
+            const SizedBox(height: JoSpace.s3),
+            Row(
+              children: const <Widget>[
+                Expanded(flex: 3, child: Text('ID')),
+                SizedBox(width: JoSpace.s2),
+                Expanded(flex: 3, child: Text('显示名')),
+                SizedBox(width: JoSpace.s2),
+                Expanded(flex: 2, child: Text('语言')),
+                SizedBox(width: JoSpace.s2),
+                Expanded(flex: 2, child: Text('性别')),
+                SizedBox(width: JoSpace.s4),
+              ],
+            ),
+            const SizedBox(height: JoSpace.s2),
+            Expanded(
+              child: ListView.separated(
+                itemCount: _rows.length,
+                separatorBuilder: (_, _) => const SizedBox(height: JoSpace.s2),
+                itemBuilder: (BuildContext context, int i) {
+                  final _VoiceDraft row = _rows[i];
+                  return Row(
+                    children: <Widget>[
+                      Expanded(
+                        flex: 3,
+                        child: JoTextField(
+                          controller: row.id,
+                          style: JoFonts.ui.copyWith(
+                            fontSize: 13,
+                            color: p.text,
+                          ),
+                          hint: 'voice id',
+                          hintStyle: JoFonts.meta.copyWith(color: p.secondary),
+                        ),
+                      ),
+                      const SizedBox(width: JoSpace.s2),
+                      Expanded(
+                        flex: 3,
+                        child: JoTextField(
+                          controller: row.name,
+                          style: JoFonts.ui.copyWith(
+                            fontSize: 13,
+                            color: p.text,
+                          ),
+                          hint: '显示名',
+                          hintStyle: JoFonts.meta.copyWith(color: p.secondary),
+                        ),
+                      ),
+                      const SizedBox(width: JoSpace.s2),
+                      Expanded(
+                        flex: 2,
+                        child: JoTextField(
+                          controller: row.language,
+                          style: JoFonts.ui.copyWith(
+                            fontSize: 13,
+                            color: p.text,
+                          ),
+                          hint: '中文 / 英文',
+                          hintStyle: JoFonts.meta.copyWith(color: p.secondary),
+                        ),
+                      ),
+                      const SizedBox(width: JoSpace.s2),
+                      Expanded(
+                        flex: 2,
+                        child: JoTextField(
+                          controller: row.gender,
+                          style: JoFonts.ui.copyWith(
+                            fontSize: 13,
+                            color: p.text,
+                          ),
+                          hint: '男 / 女',
+                          hintStyle: JoFonts.meta.copyWith(color: p.secondary),
+                        ),
+                      ),
+                      const SizedBox(width: JoSpace.s2),
+                      JoButton(
+                        text: '×',
+                        tip: '删除这一条',
+                        onTap: () => setState(() => _rows.removeAt(i)),
+                      ),
+                    ],
+                  );
+                },
+              ),
+            ),
+            const SizedBox(height: JoSpace.s3),
+            Row(
+              children: <Widget>[
+                JoButton(
+                  text: '＋ 添加一条',
+                  bordered: true,
+                  onTap: () => setState(() => _rows.add(_VoiceDraft())),
+                ),
+                const Spacer(),
+                JoButton(
+                  text: '恢复预设',
+                  bordered: true,
+                  onTap: () => Navigator.of(context).pop(const <TtsVoice>[]),
+                ),
+                const SizedBox(width: JoSpace.s2),
+                JoButton(
+                  text: '取消',
+                  bordered: true,
+                  onTap: () => Navigator.of(context).pop(),
+                ),
+                const SizedBox(width: JoSpace.s2),
+                JoButton(
+                  text: '保存',
+                  bordered: true,
+                  color: p.accent,
+                  onTap: () => Navigator.of(context).pop(
+                    _rows
+                        .map((_VoiceDraft r) => r.toVoice())
+                        .whereType<TtsVoice>()
+                        .toList(),
+                  ),
+                ),
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 }

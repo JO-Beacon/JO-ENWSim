@@ -15,6 +15,7 @@ import 'package:flutter/cupertino.dart';
 import 'package:flutter/gestures.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
+import 'package:joenws/data/world_store.dart';
 import 'package:joenws/model/model_plan.dart';
 import 'package:joenws/model/provider.dart';
 import 'package:joenws/theme/tokens.dart';
@@ -84,7 +85,7 @@ void main() {
     expect(find.byType(JoTextField), findsWidgets);
   });
 
-  testWidgets('搜索服务：DeepSeek 那页有“试搜一下”，并写明按次计费', (WidgetTester t) async {
+  testWidgets('搜索服务：DeepSeek 那页有“搜索测试”', (WidgetTester t) async {
     await t.binding.setSurfaceSize(const Size(1200, 800));
     addTearDown(() => t.binding.setSurfaceSize(null));
 
@@ -109,19 +110,19 @@ void main() {
     await t.pumpAndSettle();
 
     expect(t.takeException(), isNull);
-    expect(find.text('试搜一下'), findsOneWidget);
-    expect(find.textContaining('按次计费'), findsOneWidget);
+    expect(find.text('搜索测试'), findsOneWidget);
   });
 
   testWidgets('设置 → 引擎 那页能建出来，且不再写“还没接入”', (WidgetTester t) async {
     await t.binding.setSurfaceSize(const Size(1100, 760));
     addTearDown(() => t.binding.setSurfaceSize(null));
+    JoSettings changed = const JoSettings();
 
     await t.pumpWidget(
       host(
         SettingsPage(
-          settings: const JoSettings(),
-          onChanged: (JoSettings _) {},
+          settings: changed,
+          onChanged: (JoSettings settings) => changed = settings,
           providers: const <Provider>[],
           onProvidersChanged: (List<Provider> _) {},
           globalPlan: const ModelPlan(),
@@ -139,6 +140,49 @@ void main() {
 
     expect(t.takeException(), isNull);
     expect(find.textContaining('引擎还没接入'), findsNothing);
+    final Finder concurrency = find.descendant(
+      of: find.widgetWithText(JoField, '模型并发上限'),
+      matching: find.byType(CupertinoTextField),
+    );
+    expect(t.widget<CupertinoTextField>(concurrency).controller!.text, '1');
+    await t.enterText(concurrency, '3');
+    expect(changed.modelRequestConcurrency, 3);
+    await t.enterText(concurrency, '0');
+    expect(changed.modelRequestConcurrency, 3);
+  });
+
+  testWidgets('设置 → 数据 能显示快照统计和膨胀说明', (WidgetTester t) async {
+    final WorldStore store = WorldStore.memory();
+    addTearDown(store.close);
+
+    await t.binding.setSurfaceSize(const Size(1100, 760));
+    addTearDown(() => t.binding.setSurfaceSize(null));
+
+    await t.pumpWidget(
+      host(
+        SettingsPage(
+          settings: const JoSettings(),
+          onChanged: (JoSettings _) {},
+          providers: const <Provider>[],
+          onProvidersChanged: (List<Provider> _) {},
+          globalPlan: const ModelPlan(),
+          onGlobalPlanChanged: (ModelPlan _) {},
+          keys: const <String, String>{},
+          onKeysChanged: (Map<String, String> _) {},
+          onBack: () {},
+          worldStore: store,
+        ),
+      ),
+    );
+    expect(t.takeException(), isNull);
+
+    await t.tap(find.text('数据').first);
+    await t.pumpAndSettle();
+
+    expect(t.takeException(), isNull);
+    expect(find.text('回合快照'), findsOneWidget);
+    expect(find.textContaining('还没有回合快照'), findsOneWidget);
+    expect(find.textContaining('还没有存储层'), findsNothing);
   });
 
   testWidgets('右键菜单：自己那套外观，点“全选”真的能选中', (WidgetTester t) async {

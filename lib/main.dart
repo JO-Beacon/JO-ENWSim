@@ -3,10 +3,13 @@ import 'dart:async';
 import 'package:flutter/foundation.dart';
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart' show MethodChannel, rootBundle;
+import 'package:pdfrx/pdfrx.dart';
 
 import 'data/world_store.dart';
 import 'model/demo.dart';
+import 'model/pdf_text.dart';
 import 'model/model_plan.dart';
+import 'model/network.dart';
 import 'model/provider.dart';
 import 'theme/settings_store.dart';
 import 'theme/tokens.dart';
@@ -53,10 +56,18 @@ void _registerBundledLicenses() {
     );
     yield LicenseEntryWithLineBreaks(<String>['Noto Sans Mono'], text);
   });
+  LicenseRegistry.addLicense(() async* {
+    // RapidOCR / PP-OCR 的 Apache-2.0 上游（模型运行时按需下载，不随包）。
+    final String text = await rootBundle.loadString(
+      'assets/licenses/Apache-2.0.txt',
+    );
+    yield LicenseEntryWithLineBreaks(<String>['PP-OCR / PaddleOCR / RapidOCR'], text);
+  });
 }
 
 Future<void> main() async {
   WidgetsFlutterBinding.ensureInitialized();
+  pdfInitializer = () => pdfrxFlutterInitialize();
   _registerOwnLicense();
   _registerBundledLicenses();
   final SettingsStore store = await SettingsStore.open();
@@ -64,16 +75,26 @@ Future<void> main() async {
   final LoadResult<ModelPlan> plan = store.loadGlobalPlan();
   // 每个世界的模型配置（世界默认 / 逐步骤）。
   final LoadResult<Map<String, ModelPlan>> worldPlans = store.loadWorldPlans();
+  final JoSettings settings = store.load();
+  NetworkRuntime.configure(
+    proxyEnabled: settings.proxyEnabled,
+    proxyHost: settings.proxyHost,
+    proxyPort: settings.proxyPort,
+  );
   // 世界和回合在 SQLite 里。第一次建库时自带了几个世界。
   final WorldStore worldStore = await WorldStore.open();
   final WorldsLoad worlds = worldStore.loadWorlds();
+  final String worldsNote = <String?>[
+    worldStore.startupNote,
+    worlds.note,
+  ].whereType<String>().where((String s) => s.trim().isNotEmpty).join(' · ');
   runApp(
     JoEnwsApp(
       store: store,
       worldStore: worldStore,
       initialWorlds: worlds.worlds,
-      worldsNote: worlds.note,
-      initial: store.load(),
+      worldsNote: worldsNote.isEmpty ? null : worldsNote,
+      initial: settings,
       providers: providers.value,
       servicesNote: loadNoteOf(providers, '服务商'),
       initialGlobalPlan: plan.value,
@@ -242,6 +263,11 @@ class _JoEnwsAppState extends State<JoEnwsApp>
 
   void _update(JoSettings next) {
     setState(() => _settings = next);
+    NetworkRuntime.configure(
+      proxyEnabled: next.proxyEnabled,
+      proxyHost: next.proxyHost,
+      proxyPort: next.proxyPort,
+    );
     _syncTheme();
     widget.store.save(next);
   }
@@ -324,8 +350,9 @@ class _JoEnwsAppState extends State<JoEnwsApp>
           },
         );
       },
-      home: Workspace(
-        settings: _settings,
+      home: SafeArea(
+        child: Workspace(
+          settings: _settings,
         onSettingsChanged: _update,
         // 两侧栏拖出来的宽度存在同一个存档里，重启还在。
         settingsStore: widget.store,
@@ -358,6 +385,7 @@ class _JoEnwsAppState extends State<JoEnwsApp>
           setState(() => _worldPlans = <String, ModelPlan>{...next});
           widget.store.saveWorldPlans(next);
         },
+        ),
       ),
     );
   }

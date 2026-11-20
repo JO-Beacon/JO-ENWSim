@@ -2,6 +2,8 @@ import 'dart:convert';
 
 import 'package:http/http.dart' as http;
 
+import 'network.dart';
+
 import 'provider.dart';
 
 /// 探测结果（测试连接 / 获取模型共用）。
@@ -35,7 +37,7 @@ class ProviderApi {
       return const ProbeResult(ok: false, message: '接口地址填得不对');
     }
     try {
-      final http.Response r = await (client ?? http.Client())
+      final http.Response r = await (client ?? NetworkRuntime.newClient())
           .get(uri, headers: _headers(p))
           .timeout(_timeout);
       if (r.statusCode < 200 || r.statusCode >= 300) {
@@ -48,9 +50,9 @@ class ProviderApi {
           ),
         );
       }
-      return ProbeResult(ok: true, message: '连上了（HTTP ${r.statusCode}），key 可用');
+      return ProbeResult(ok: true, message: '连接成功（HTTP ${r.statusCode}），API Key 可用');
     } catch (e) {
-      return ProbeResult(ok: false, message: '连不上：$e');
+      return ProbeResult(ok: false, message: '连接失败：$e');
     }
   }
 
@@ -68,7 +70,7 @@ class ProviderApi {
       return const ProbeResult(ok: false, message: '接口地址填得不对');
     }
     try {
-      final http.Response r = await (client ?? http.Client())
+      final http.Response r = await (client ?? NetworkRuntime.newClient())
           .get(uri, headers: _headers(p))
           .timeout(_timeout);
       if (r.statusCode < 200 || r.statusCode >= 300) {
@@ -97,7 +99,7 @@ class ProviderApi {
       return const ProbeResult(ok: false, message: '接口地址填得不对');
     }
     try {
-      final http.Response r = await (client ?? http.Client())
+      final http.Response r = await (client ?? NetworkRuntime.newClient())
           .get(uri, headers: _headers(p))
           .timeout(_timeout);
       if (r.statusCode < 200 || r.statusCode >= 300) {
@@ -112,11 +114,11 @@ class ProviderApi {
       }
       final List<String> ids = _parseIds(p.protocol, r.body);
       if (ids.isEmpty) {
-        return ProbeResult(ok: false, message: '连上了，但没解析出模型：${_short(r.body)}');
+        return ProbeResult(ok: false, message: '连接成功，但未解析出模型：${_short(r.body)}');
       }
       return ProbeResult(
         ok: true,
-        message: '连上了 · ${ids.length} 个模型',
+        message: '连接成功 · ${ids.length} 个模型',
         models: ids,
       );
     } catch (e) {
@@ -155,7 +157,9 @@ class ProviderApi {
     };
     final String key = p.apiKey.trim();
     switch (p.protocol.wire) {
-      case Wire.openai:
+      case Wire.chatCompletions:
+        h['Authorization'] = 'Bearer $key';
+      case Wire.responses:
         h['Authorization'] = 'Bearer $key';
       case Wire.anthropic:
         h['x-api-key'] = key;

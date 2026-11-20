@@ -40,13 +40,13 @@ void main() {
         opening: '开场',
         playerName: '人物1',
         characters: const <CharCard>[CharCard(name: '人物1', persona: '守着楼梯口的人')],
-        lanes: <SeqLane>[
-          SeqLane(
+        parallelPlaces: <ParallelPlace>[
+          ParallelPlace(
             id: 'l1',
             place: '正厅',
             here: true,
             events: <TurnStep>[
-              TurnStep(kind: 'B2', who: '人物1', time: '雨夜', text: text),
+              TurnStep(kind: 'CH_ACT', who: '人物1', time: '雨夜', text: text),
             ],
           ),
         ],

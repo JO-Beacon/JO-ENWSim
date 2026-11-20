@@ -37,12 +37,12 @@ void main() {
       ),
     );
     expect(find.text('＋ 新建世界'), findsOneWidget);
-    expect(find.text('你要做什么……'), findsOneWidget);
+    expect(find.text('请输入当前操控角色的行动'), findsOneWidget);
   });
 
-  // 这条是在**整个 App 的树**里验证发言框：能写字、能拖选。
+  // 这条是在**整个 App 的树**里验证行动输入框：能写字、能拖选。
   // （右键菜单选项的问题已搁置，见 `AGENTS/右键菜单问题.md`，这里不验它。）
-  testWidgets('App 里：发言框能写字、能拖选', (WidgetTester tester) async {
+  testWidgets('App 里：行动输入框能写字、能拖选', (WidgetTester tester) async {
     SharedPreferences.setMockInitialValues(<String, Object>{});
     final SettingsStore store = await SettingsStore.open();
     final WorldStore worldStore = WorldStore.memory()..seedDemo();
@@ -58,7 +58,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // 发言框：整页只有这一个 EditableText。
+    // 行动输入框：整页只有这一个 EditableText。
     final Finder field = find.byType(EditableText);
     expect(field, findsOneWidget);
     await tester.enterText(field, 'abcdef');
@@ -82,7 +82,7 @@ void main() {
     expect(et.controller.selection.isCollapsed, isFalse);
   });
 
-  testWidgets('发言框是多行的：长句折行；换行键插换行且光标跟上；发送不插换行', (WidgetTester tester) async {
+  testWidgets('行动输入框是多行的：长句折行；换行键插换行且光标跟上；发送不插换行', (WidgetTester tester) async {
     // 这里把“换行”绑成 **Shift+Enter**：裸 Enter 我们故意不绑，交给输入框
     // 自己处理（光标/滚动/输入法同步都是它的事）—— 测试环境模拟不了输入法
     // 插字，所以只能拿组合键验“我们手动插入”的那条路。
@@ -103,7 +103,7 @@ void main() {
     );
     await tester.pumpAndSettle();
 
-    // 一开始没选中任何步骤，页面上只有发言框这一个 JoTextField。
+    // 一开始没选中任何步骤，页面上只有行动输入框这一个 JoTextField。
     final Finder box = find.byType(JoTextField);
     expect(box, findsOneWidget);
     expect(tester.widget<JoTextField>(box).maxLines, greaterThan(1));
@@ -163,6 +163,7 @@ void main() {
     await tester.pumpAndSettle();
     expect(tester.takeException(), isNull);
     expect(find.text('这一步'), findsOneWidget);
+    expect(find.text('朗读这一步'), findsOneWidget);
   });
 
   // 左栏每张世界卡片上的铅笔：在**右边**、跟整张卡片**上下居中**。

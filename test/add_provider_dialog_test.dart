@@ -59,10 +59,16 @@ void main() {
   testWidgets('弹窗里有搜索框，默认列出全部厂商', (WidgetTester t) async {
     await open(t);
     expect(t.takeException(), isNull);
-    expect(find.text('找厂商（名字或地址）'), findsOneWidget);
+    expect(find.text('搜索厂商（名称或地址）'), findsOneWidget);
     expect(inDialog('OpenAI'), findsOneWidget);
-    expect(inDialog('小米 MiMo'), findsOneWidget);
     expect(inDialog('DeepSeek'), findsOneWidget);
+    // 预设多到一屏放不下，MiMo 要滚一下才进视口（ListView 是懒构建的）。
+    await t.drag(
+      find.descendant(of: find.byType(Dialog), matching: find.byType(ListView)),
+      const Offset(0, -300),
+    );
+    await t.pumpAndSettle();
+    expect(inDialog('小米 MiMo'), findsOneWidget);
   });
 
   testWidgets('按名字过滤', (WidgetTester t) async {
@@ -88,7 +94,7 @@ void main() {
     await open(t);
     await type(t, 'zzz-not-a-vendor');
 
-    expect(find.textContaining('没找到匹配的厂商'), findsOneWidget);
+    expect(find.textContaining('没有匹配的厂商'), findsOneWidget);
     expect(inDialog('小米 MiMo'), findsNothing);
     // 自定义还能用，不至于把路堵死。
     expect(inDialog('自定义 · OpenAI 兼容 · chat/completions'), findsOneWidget);
@@ -101,6 +107,12 @@ void main() {
 
     await type(t, '');
     expect(inDialog('OpenAI'), findsOneWidget);
+    // 预设多了，MiMo 要滚一下才进视口。
+    await t.drag(
+      find.descendant(of: find.byType(Dialog), matching: find.byType(ListView)),
+      const Offset(0, -300),
+    );
+    await t.pumpAndSettle();
     expect(inDialog('小米 MiMo'), findsOneWidget);
   });
 

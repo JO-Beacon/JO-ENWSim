@@ -1,4 +1,4 @@
-﻿# JO-ENWSim 打包脚本
+# JO-ENWSim 打包脚本
 # 产物统一进 dist/（见 AGENTS.md 规则 7）
 #
 # 用法（用 pwsh，即 PowerShell 7）：
@@ -15,13 +15,13 @@ Set-Location $root
 $dist = Join-Path $root "dist"
 New-Item -ItemType Directory -Force -Path $dist | Out-Null
 
-Write-Host "== 1/3  Windows release ==" -ForegroundColor Cyan
+Write-Host "== 1/2  Windows release ==" -ForegroundColor Cyan
 # Flutter 的 Windows 版本信息在 CMake 配置时注入；增量构建不会刷新（exe 版本会停在旧值）。
 # 故先清掉 build\windows 强制重编，保证版本 / 身份正确。
 Remove-Item -Recurse -Force "build\windows" -ErrorAction SilentlyContinue
 flutter build windows --release
 
-Write-Host "== 2/3  Inno Setup 安装程序 ==" -ForegroundColor Cyan
+Write-Host "== 2/2  Inno Setup 安装程序 ==" -ForegroundColor Cyan
 
 # 版本号唯一真源：pubspec.yaml 的 version
 $pubspec = Get-Content "pubspec.yaml" -Raw
@@ -39,10 +39,13 @@ if (-not $iscc) { throw "找不到 ISCC.exe（请先装 Inno Setup）" }
 & $iscc "/DMyAppVersion=$ver" "/DMyAppFullVersion=$full" "installer\JO-ENWSim.iss"
 
 if (-not $SkipAndroid) {
-  Write-Host "== 3/3  安卓分体式 release APK ==" -ForegroundColor Cyan
+  Write-Host "== 安卓分体 release APK ==" -ForegroundColor Cyan
+  # 按 ABI 出 arm / arm64 / x64 三个包；TTS 模型不随包，单包降到 100 MB 上下。
+  # 先清旧 APK，避免把上次的单包或别的 ABI 一起拷进 dist。
+  Remove-Item -Force "build\app\outputs\flutter-apk\*.apk" -ErrorAction SilentlyContinue
   flutter build apk --release --split-per-abi
   if ($LASTEXITCODE -eq 0 -and (Test-Path "build\app\outputs\flutter-apk")) {
-    Copy-Item -Force "build\app\outputs\flutter-apk\*.apk" $dist
+    Copy-Item -Force "build\app\outputs\flutter-apk\app-*-release.apk" $dist
   } else {
     Write-Warning "安卓构建失败或未产出（退出码 $LASTEXITCODE），跳过拷贝。"
   }

@@ -1,11 +1,15 @@
 // 流程步骤，以及“每个世界的模型配置”。
 //
-// 每一步（A₀–A₄ / B₁ / B₂）都能**单独指定模型**。
+// 每个 AI 步骤都能单独指定模型；展示与配置共用正式语义标识。
 // 配置挂在**世界**上：世界默认一份 + 每步可覆盖。
 // 全局默认不在这里——全局默认在设置里。
 
+import '../engine/step_id.dart';
+
+export '../engine/step_id.dart';
+
 /// 流程里的一步。设置页的提示词框与模型配置共用这一份。
-typedef StepKind = ({String id, String title, String hint});
+typedef StepKind = EngineStep;
 
 /// 每一步的**默认提示词**。
 ///
@@ -16,51 +20,54 @@ typedef StepKind = ({String id, String title, String hint});
 /// 这里写的只是**这一步的任务**。世界观、角色卡、最近的历史、
 /// 输出格式那些公共部分由引擎自己拼，不进这些框。
 const Map<String, String> kDefaultPrompts = <String, String>{
-  'A0':
-      '判断这条序列要不要裂成两条。'
-      '如果两头已经各走各的、再放一起已经说不通，就该裂；'
+  StepId.gmOpenPlace:
+      '判断要不要为别处正在发生的事开启一条并行地点。'
+      '如果两头已经各走各的、再放一起已经说不通，就该开启；'
       '否则保持原样。把判断与一句理由写出来。',
-  'AD':
+  StepId.gmRoute:
       '判断本回合该做哪一件：\n'
       '  env  = 环境更新（推进世界自身的事件：昼夜、天气、火势、人群）\n'
       '  turn = 角色回合（某个角色行动一次）\n'
       '没有外部规则，你自己看当前情势定。',
-  'A1':
+  StepId.gmEnvironment:
       '把世界自身的事件往前推一步。'
       '不要写任何角色的主动行为——那是角色回合的事。'
       '时间标签用文本（比如“入夜之后”），不要用时间戳。',
-  'A2': '判断这一步有资格行动的角色。只从给出的角色里选，名字要一模一样。',
-  'A3':
+  StepId.gmCast: '从当前现场已知角色中确定在场名单，不能添加未知角色。',
+  StepId.gmObserveScene: '依据当前环境、遮挡和角色状态，分别给出每个角色此刻可以感知的现场。'
+      '隐藏事实、容器内部、他人内心和已经过去的事件不能因来到现场而自动获知。',
+  StepId.gmEligibility: '判断这一步有资格行动的角色。只能从程序给出的基础名单中排除角色。',
+  StepId.gmSelectActor:
       '据每个参与角色各自感知到的内容，'
       '挑唯一一个该行动的角色。只能从参与者里挑。',
-  'A4':
+  StepId.gmMergePlace:
       '判断这条序列要不要和别的序列合并。'
       '两边已经汇到同一处、分开写反而零碎，就该合；否则保持原样。'
       '把判断与一句理由写出来。',
-  'B1':
+  StepId.chPerceive:
       '写出这个角色此刻感知到了什么。'
       '只能写它能知道的：看得见、听得见、摸得着的。'
       '不要写它的想法或决定（那是下一步的事），也不要写别人的内心。',
-  'B2':
+  StepId.chAct:
       '写出这个角色这一步的行为。'
       '一行到几句话，写它做了什么、说了什么，不要写别人的反应。'
       '时间标签用文本，不要用时间戳。',
+  StepId.chMemoryWrite:
+      '整理这个角色自己的第一人称记忆。只能使用 encode / reinforce / compress / reinterpret / archive，'
+      '不能写事件、事实或别人的记忆。',
+  StepId.chMemoryRecall:
+      '只从这个角色自己的记忆里，选出此刻会想起的条目；不能编造 id。',
+  StepId.gmParseInput: '解析玩家原文，不改写原意；未决信息请向玩家本人澄清。',
+  StepId.gmResolveAction: '依据世界规则和当前权威状态裁定这一个行动，区分客观结果与各角色见闻。',
+  StepId.gmNarrate: '仅依据已接受事件生成正文，行动尝试的实际结果以裁定为准。',
+  StepId.gmReviewNarration: '检查正文是否增加事件之外的动作、反应、心理或因果，只报告问题。',
 };
 
 /// 这一步默认的提示词（没有就是空串）。
 String kDefaultPromptOf(String id) => kDefaultPrompts[id] ?? '';
 
-/// 流程图里的八步（含 A 决策）。
-const List<StepKind> kSteps = <StepKind>[
-  (id: 'A0', title: '是否分裂序列', hint: '判断这条序列要不要裂成两条'),
-  (id: 'AD', title: '这一步做什么', hint: '环境更新（世界自己动）还是角色回合（某个角色行动）'),
-  (id: 'A1', title: '环境更新', hint: '把世界自身的事件推进到当前时刻'),
-  (id: 'A2', title: '框选参与的角色', hint: '本回合有资格行动的角色'),
-  (id: 'A3', title: '框选唯一的角色', hint: '从参与角色里挑出唯一的那个去行动'),
-  (id: 'A4', title: '是否需要合并', hint: '要不要和其他序列合并'),
-  (id: 'B1', title: '角色感知', hint: '该角色感知到了什么'),
-  (id: 'B2', title: '角色行为', hint: '该角色如何行动'),
-];
+/// 展示、提示词和逐步模型配置共用正式步骤清单。
+const List<StepKind> kSteps = kAiSteps;
 
 /// 一次模型选择：哪个服务商下的哪个模型。
 ///

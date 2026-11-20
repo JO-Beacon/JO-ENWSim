@@ -15,13 +15,30 @@ dependencies:
   # 小卡片的两行摘要要拿纯文字，自己也用一下解析器。
   markdown: ^7.3.1
   url_launcher: ^6.3.2
+  file_selector: ^1.0.3
+  # 拍照：Android 用 camera 的 CameraX 实现，Windows 用 camera_windows。
+  camera: ^0.12.2
+  camera_windows: ^0.3.1
+  # file_picker 8.x 的 Android compileSdk 还是 34；PP-OCR 链要求 36。
+  file_picker: ^10.3.10
+  pdfrx: ^2.13.0
+  # OCR：自己接中游，直接跑 PP-OCR + ONNX Runtime，不再依赖平台各包一半的包装。
+  onnxruntime_v2: ^1.23.2+2
+  image: ^4.5.2
   package_info_plus: ^9.0.0
   shared_preferences: ^2.3.0
   http: ^1.2.0
+  crypto: ^3.0.7
+  # 运行时下载可下载 TTS 模型：tar.bz2 解包。
+  archive: ^4.7.1
   sqlite3: ^3.5.2
   path_provider: ^2.1.6
+  flutter_tts: ^4.2.5
+  sherpa_onnx: ^2.0.1
 dev_dependencies:
   flutter_test:
+    sdk: flutter
+  integration_test:
     sdk: flutter
   flutter_lints: ^6.0.0
 
@@ -33,6 +50,7 @@ flutter:
     - assets/licenses/SourceHanSans-OFL-1.1.txt
     - assets/licenses/RemixIcon-License-1.0.txt
     - assets/licenses/NotoSansMono-OFL-1.1.txt
+    - assets/licenses/Apache-2.0.txt
     - LICENSE
     - NOTICE
   fonts:

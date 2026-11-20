@@ -1,0 +1,26 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 256 256" width="256" height="256">
+  <title>JO-ENWSim 应用图标</title>
+  <defs>
+    <linearGradient id="tile" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0" stop-color="#17243A"/>
+      <stop offset="1" stop-color="#080D14"/>
+    </linearGradient>
+    <radialGradient id="glow" gradientUnits="userSpaceOnUse" cx="152" cy="104" r="120">
+      <stop offset="0" stop-color="#FFD77A" stop-opacity="0.45"/>
+      <stop offset="0.5" stop-color="#FFD77A" stop-opacity="0.16"/>
+      <stop offset="1" stop-color="#FFD77A" stop-opacity="0"/>
+    </radialGradient>
+    <clipPath id="walls">
+      <path d="M128,51 L35.6,97.2 L35.6,158.8 L128,112.6 Z"/>
+      <path d="M128,51 L220.4,97.2 L220.4,158.8 L128,112.6 Z"/>
+    </clipPath>
+  </defs>
+  <path d="M60,0 H196 C229,0 256,27 256,60 V196 C256,229 229,256 196,256 H60 C27,256 0,229 0,196 V60 C0,27 27,0 60,0 Z" fill="url(#tile)"/>
+  <path d="M128,51 L35.6,97.2 L35.6,158.8 L128,112.6 Z" fill="#26334A"/>
+  <path d="M128,51 L220.4,97.2 L220.4,158.8 L128,112.6 Z" fill="#3B4F6B"/>
+  <path d="M128,112.6 L220.4,158.8 L128,205 L35.6,158.8 Z" fill="#75849B"/>
+  <g clip-path="url(#walls)">
+    <circle cx="152" cy="104" r="96" fill="url(#glow)"/>
+  </g>
+  <circle cx="152" cy="104" r="50" fill="#FFE08A"/>
+</svg>

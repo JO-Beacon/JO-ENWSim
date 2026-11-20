@@ -46,7 +46,7 @@ void main() {
 
     expect(seen.toString(), 'https://api.openai.com/v1/models');
     expect(r.ok, isTrue);
-    expect(r.message, contains('连上了'));
+    expect(r.message, contains('连接成功'));
     // 关键：测试不返回模型，免得调用方顺手写回配置。
     expect(r.models, isEmpty);
   });

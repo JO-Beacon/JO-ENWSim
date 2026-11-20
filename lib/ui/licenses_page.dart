@@ -70,7 +70,7 @@ class _LicensesPageState extends State<LicensesPage> {
                 const Spacer(),
                 if (m != null)
                   Text(
-                    '一共有 ${m.length} 项',
+                    '共 ${m.length} 项',
                     style: JoFonts.meta.copyWith(color: p.secondary),
                   ),
               ],

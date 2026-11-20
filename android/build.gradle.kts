@@ -19,6 +19,16 @@ subprojects {
     project.evaluationDependsOn(":app")
 }
 
+// file_picker 8.x 仍写着 compileSdk 34；本项目的 PP-OCR 依赖要求 36。
+// 统一把 Android library 子工程的 compileSdk 拉到 36。
+subprojects {
+    plugins.withId("com.android.library") {
+        extensions.configure<com.android.build.gradle.LibraryExtension> {
+            compileSdk = 36
+        }
+    }
+}
+
 tasks.register<Delete>("clean") {
     delete(rootProject.layout.buildDirectory)
 }

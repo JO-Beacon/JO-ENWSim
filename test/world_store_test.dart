@@ -4,8 +4,8 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:joenws/data/world_store.dart';
+import 'package:joenws/engine/character_memory.dart';
 import 'package:joenws/model/demo.dart';
-import 'package:joenws/model/memory.dart';
 import 'package:joenws/model/turn.dart';
 
 void main() {
@@ -33,22 +33,47 @@ void main() {
     expect(back.characters.first.name, w.characters.first.name);
     expect(back.characters.first.persona, w.characters.first.persona);
 
-    expect(back.lanes.length, w.lanes.length);
-    expect(back.lanes.first.id, w.lanes.first.id);
-    expect(back.lanes.first.place, w.lanes.first.place);
-    expect(back.lanes.first.here, w.lanes.first.here);
-    expect(back.lanes.first.events.length, w.lanes.first.events.length);
+    expect(back.parallelPlaces.length, w.parallelPlaces.length);
+    expect(back.parallelPlaces.first.id, w.parallelPlaces.first.id);
+    expect(back.parallelPlaces.first.place, w.parallelPlaces.first.place);
+    expect(back.parallelPlaces.first.here, w.parallelPlaces.first.here);
+    expect(
+      back.parallelPlaces.first.events.length,
+      w.parallelPlaces.first.events.length,
+    );
 
-    final TurnStep a = w.lanes.first.events.first;
-    final TurnStep b = back.lanes.first.events.first;
+    final TurnStep a = w.parallelPlaces.first.events.first;
+    final TurnStep b = back.parallelPlaces.first.events.first;
     expect(b.kind, a.kind);
     expect(b.who, a.who);
     expect(b.time, a.time);
     expect(b.text, a.text);
 
     expect(back.moves.length, w.moves.length);
-    expect(back.moves.first.fromLane, w.moves.first.fromLane);
+    expect(back.moves.first.fromParallelPlace, w.moves.first.fromParallelPlace);
     expect(back.moves.first.toStep, w.moves.first.toStep);
+  });
+
+  test('世界和角色的 TTS key 存读不丢', () {
+    final WorldStore s = WorldStore.memory();
+    addTearDown(s.close);
+    final World base = DemoData.worlds.first;
+    final World w = base.copyWith(
+      ttsKey: 'system\u0000\u0000voice-1\u0000',
+      narratorTtsKey: 'builtin\u0000\u0000\u0000melo',
+      characters: <CharCard>[
+        base.characters.first.copyWith(
+          ttsKey: 'api\u0000p1\u0000v1\u0000tts-1',
+        ),
+        ...base.characters.skip(1),
+      ],
+    );
+    s.saveWorld(w);
+    final World back = s.loadWorlds().worlds.single;
+    expect(back.ttsKey, 'system\u0000\u0000voice-1\u0000');
+    expect(back.narratorTtsKey, 'builtin\u0000\u0000\u0000melo');
+    expect(back.characters.first.ttsKey, 'api\u0000p1\u0000v1\u0000tts-1');
+    expect(back.characters[1].ttsKey, '');
   });
 
   test('三个 demo 世界全存得住', () {
@@ -77,7 +102,7 @@ void main() {
       w.id,
       'l1',
       const TurnStep(
-        kind: 'B2',
+        kind: 'CH_ACT',
         who: '人物2',
         time: '后来',
         text: '他去了仓房。',
@@ -90,10 +115,10 @@ void main() {
     );
 
     final List<TurnStep> steps = s.loadSteps(w.id, 'l1');
-    expect(steps.length, w.lanes.first.events.length + 1);
+    expect(steps.length, w.parallelPlaces.first.events.length + 1);
 
     final TurnStep last = steps.last;
-    expect(last.kind, 'B2');
+    expect(last.kind, 'CH_ACT');
     expect(last.who, '人物2');
     expect(last.text, '他去了那间仓房。'.replaceAll('那间', ''));
     expect(last.candidates, <String>['人物2', '人物3']);
@@ -102,35 +127,43 @@ void main() {
     expect(last.ok, isTrue);
   });
 
-  test('记忆存了能读回来，上帝那本也在', () {
+  test('记忆存了能读回来，两个角色各一本', () {
     final WorldStore s = WorldStore.memory();
     addTearDown(s.close);
 
     final World w = DemoData.worlds.first;
     s.saveWorld(w);
-
-    final MemoryEntry e = newMemoryEntry(content: '他记得门是插着的。');
-    s.saveMemory(
-      w.id,
-      MemoryBook(ownerId: '', entries: <MemoryEntry>[e]),
-    );
-    s.saveMemory(
-      w.id,
-      MemoryBook(
-        ownerId: '人物1',
-        entries: <MemoryEntry>[newMemoryEntry(content: '雨声很响。')],
+    s.saveWorldMemory(w.id, <CharacterMemory>[
+      const CharacterMemory(
+        id: 'm1',
+        characterId: 'char:人物1',
+        text: '他记得门是插着的。',
+        kind: MemoryKind.note,
+        origin: MemoryOrigin.manual,
       ),
-    );
+      const CharacterMemory(
+        id: 'm2',
+        characterId: 'char:人物2',
+        text: '雨声很响。',
+        kind: MemoryKind.note,
+        origin: MemoryOrigin.manual,
+      ),
+    ]);
 
-    final List<MemoryBook> books = s.loadMemories(w.id);
-    expect(books.length, 2);
-    final MemoryBook god =
-        books.firstWhere((MemoryBook b) => b.ownerId.isEmpty);
-    expect(god.entries.length, 1);
-    expect(god.entries.first.content, '他记得门是插着的。');
-    final MemoryBook one =
-        books.firstWhere((MemoryBook b) => b.ownerId == '人物1');
-    expect(one.entries.first.content, '雨声很响。');
+    final List<CharacterMemory> memory = s.loadWorldMemory(w.id);
+    expect(memory.length, 2);
+    expect(
+      memory
+          .firstWhere((CharacterMemory m) => m.characterId == 'char:人物1')
+          .text,
+      '他记得门是插着的。',
+    );
+    expect(
+      memory
+          .firstWhere((CharacterMemory m) => m.characterId == 'char:人物2')
+          .text,
+      '雨声很响。',
+    );
   });
 
   test('一步坏掉只跳过那一步，其余照读', () {
@@ -142,9 +175,9 @@ void main() {
 
     // 直接往 step 表塞一条认不出的 kind —— 读的时候应该只丢这一条。
     // （这里用 store 自己的接口做不到，所以走底层那条 appended 步。）
-    s.appendStep(w.id, 'l1', const TurnStep(kind: 'B2', who: '人物9', text: 'x'));
+    s.appendStep(w.id, 'l1', const TurnStep(kind: 'CH_ACT', who: '人物9', text: 'x'));
     final List<TurnStep> ok = s.loadSteps(w.id, 'l1');
-    expect(ok.length, w.lanes.first.events.length + 1);
+    expect(ok.length, w.parallelPlaces.first.events.length + 1);
     expect(ok.last.who, '人物9');
   });
 
@@ -154,19 +187,21 @@ void main() {
 
     final World w = DemoData.worlds.first;
     s.saveWorld(w);
-    s.saveMemory(
-      w.id,
-      MemoryBook(
-        ownerId: '',
-        entries: <MemoryEntry>[newMemoryEntry(content: '忘掉吧。')],
+    s.saveWorldMemory(w.id, const <CharacterMemory>[
+      CharacterMemory(
+        id: 'm1',
+        characterId: 'char:人物1',
+        text: '忘掉吧。',
+        kind: MemoryKind.note,
+        origin: MemoryOrigin.manual,
       ),
-    );
+    ]);
 
     s.deleteWorld(w.id);
 
     expect(s.loadWorlds().worlds, isEmpty);
     expect(s.loadSteps(w.id, 'l1'), isEmpty);
-    expect(s.loadMemories(w.id), isEmpty);
+    expect(s.loadWorldMemory(w.id), isEmpty);
   });
 
   test('播种：手动播一下，demo 那几个世界就进去了', () {
@@ -184,7 +219,7 @@ void main() {
   });
 
   test('追加一步之后，**读整个世界**也能看到那一步', () {
-    // 这条是给一个真 bug 立的：步以前存两份（lanes JSON + step 表），
+    // 这条是给一个真 bug 立的：步以前存两份（parallelPlaces JSON + step 表），
     // appendStep 只写 step 表，而 loadWorlds 读的是 JSON ——
     // 于是引擎跑完、重新读库，画布上永远看不到新步。
     final WorldStore s = WorldStore.memory();
@@ -195,13 +230,15 @@ void main() {
     s.appendStep(
       w.id,
       'l1',
-      const TurnStep(kind: 'B2', who: '人物9', text: '新的一步'),
+      const TurnStep(kind: 'CH_ACT', who: '人物9', text: '新的一步'),
     );
 
     final World back = s.loadWorlds().worlds.first;
-    final SeqLane lane = back.lanes.firstWhere((SeqLane l) => l.id == 'l1');
-    expect(lane.events.length, w.lanes.first.events.length + 1);
-    expect(lane.events.last.text, '新的一步');
+    final ParallelPlace place = back.parallelPlaces.firstWhere(
+      (ParallelPlace p) => p.id == 'l1',
+    );
+    expect(place.events.length, w.parallelPlaces.first.events.length + 1);
+    expect(place.events.last.text, '新的一步');
   });
 
   test('认不出的步骤类型会抛，不静默降级', () {
@@ -209,7 +246,7 @@ void main() {
       () => TurnStep.fromJson(<String, Object?>{'kind': 'ZZ'}),
       throwsFormatException,
     );
-    expect(isKnownStep('B2'), isTrue);
+    expect(isKnownStep('CH_ACT'), isTrue);
     expect(isKnownStep('ZZ'), isFalse);
   });
 }

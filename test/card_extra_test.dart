@@ -10,14 +10,15 @@ import 'package:joenws/ui/card_extra.dart';
 const double card = 92;
 
 /// 一直推到不动为止。
-void settle(CardExtra c, {String lane = 'a', int row = 0, double value = 0}) {
+void settle(CardExtra c, {String parallelPlace = 'a', int row = 0, double value = 0}) {
   int n = 0;
-  while (c.advance(1 / 60, target: (lane, row), targetValue: value)) {
+  while (c.advance(1 / 60, target: (parallelPlace, row), targetValue: value)) {
     if (++n > 600) fail('推了 600 帧还没停（不会收敛？）');
   }
 }
 
-double height(CardExtra c, String lane, int row) => card + c.of(lane, row);
+double height(CardExtra c, String parallelPlace, int row) =>
+    card + c.of(parallelPlace, row);
 
 void main() {
   test('什么都没选：所有卡都是常规高度、不用推帧', () {
@@ -58,7 +59,7 @@ void main() {
     expect(c.of('b', 2), greaterThan(0));
     expect(c.of('b', 2), lessThan(40));
 
-    settle(c, lane: 'b', row: 2, value: 40);
+    settle(c, parallelPlace: 'b', row: 2, value: 40);
     expect(c.of('a', 0), 0, reason: 'A 应该收干净了');
     expect(height(c, 'b', 2), card + 40);
     // 让位只算 B 上面那张 A 的残留（已经 0）+ B 自己的行不算在里面。
@@ -69,7 +70,7 @@ void main() {
   test('取消选中：卡慢慢缩回去，下面的行慢慢回来', () {
     final CardExtra c = CardExtra();
     c.advance(1 / 60, target: ('a', 1), targetValue: 120);
-    settle(c, lane: 'a', row: 1, value: 120);
+    settle(c, parallelPlace: 'a', row: 1, value: 120);
     expect(c.padAbove(2), 120);
 
     // 取消：目标没了，全部往 0 走。

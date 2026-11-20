@@ -7,7 +7,7 @@
 //
 // 与 DeepSeek 那套的区别（这就是为什么不能共用一份请求体）：
 //   · 搜索在 `/search`（没有 `/v1` 前缀），取正文是 `/extract` 而不是 `/fetch`；
-//   · 「要不要正文」不是布尔，而是 `include_raw_content`；
+//   · “要不要正文”不是布尔，而是 `include_raw_content`；
 //   · 结果里正文叫 `raw_content`，摘要叫 `content`；
 //   · 错误体是 `{"detail":{"error": "..."}}`，不是 OpenAI 那种 `{"error":{...}}`，
 //     而且有 432 / 433 两个它自己的码（额度/套餐超限）。
@@ -15,6 +15,8 @@
 import 'dart:convert';
 
 import 'package:http/http.dart' as http;
+
+import 'network.dart';
 
 import 'search_types.dart';
 
@@ -44,7 +46,7 @@ class TavilySearch {
     };
     final http.Response r;
     try {
-      r = await (client ?? http.Client())
+      r = await (client ?? NetworkRuntime.newClient())
           .post(
             _uri('/search'),
             headers: _headers(apiKey),
@@ -104,7 +106,7 @@ class TavilySearch {
     if (u.isEmpty) return const FetchOutcome(ok: false, message: '地址是空的');
     final http.Response r;
     try {
-      r = await (client ?? http.Client())
+      r = await (client ?? NetworkRuntime.newClient())
           .post(
             _uri('/extract'),
             headers: _headers(apiKey),

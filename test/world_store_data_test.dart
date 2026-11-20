@@ -7,21 +7,24 @@
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:joenws/data/world_store.dart';
+import 'package:joenws/engine/character_memory.dart';
+import 'package:joenws/engine/turn_session.dart';
 import 'package:joenws/model/char_choices.dart';
 import 'package:joenws/model/demo.dart';
-import 'package:joenws/model/memory.dart';
 import 'package:joenws/model/model_plan.dart';
 import 'package:joenws/model/turn.dart';
+import 'package:joenws/model/world_search.dart';
 
-MemoryBook book(String owner, List<String> contents) => MemoryBook(
-  ownerId: owner,
-  entries: <MemoryEntry>[
-    for (final String c in contents) newMemoryEntry(content: c),
-  ],
+CharacterMemory note(String id, String name, String text) => CharacterMemory(
+  id: id,
+  characterId: 'char:$name',
+  text: text,
+  kind: MemoryKind.note,
+  origin: MemoryOrigin.manual,
 );
 
 TurnStep step(String text) => TurnStep(
-  kind: 'B2',
+  kind: 'CH_ACT',
   who: '人物1',
   time: '雨夜',
   text: text,
@@ -41,39 +44,107 @@ World worldWith(String id, {String name = '旧宅'}) => World(
     CharCard(name: '人物1', persona: '守着楼梯口的人'),
     CharCard(name: '人物2', persona: '从后门进来'),
   ],
-  lanes: const <SeqLane>[
-    SeqLane(id: 'l1', place: '正厅', here: true, events: <TurnStep>[]),
-    SeqLane(id: 'l2', place: '仓房', here: false, events: <TurnStep>[]),
+  parallelPlaces: const <ParallelPlace>[
+    ParallelPlace(id: 'l1', place: '正厅', here: true, events: <TurnStep>[]),
+    ParallelPlace(id: 'l2', place: '仓房', here: false, events: <TurnStep>[]),
   ],
   moves: const <MoveLink>[],
 );
 
 void main() {
-  test('一整份记忆：存了能读回来，删掉的主人也会删掉', () {
+  test('搜索账本能存能读', () {
+    final WorldStore store = WorldStore.memory();
+    final World world = DemoData.worlds.first;
+    store.saveWorld(world);
+    store.saveSearchLog(
+      worldId: world.id,
+      source: 'tavily',
+      query: '沈宅 落款',
+      ok: true,
+      message: '2 条结果',
+      hits: <Map<String, Object?>>[
+        <String, Object?>{'title': '沈宅档案', 'url': 'https://example.com'},
+      ],
+    );
+    final List<Map<String, Object?>> logs = store.loadSearchLogs(world.id);
+    expect(logs, hasLength(1));
+    expect(logs.single['query'], '沈宅 落款');
+    expect(logs.single['ok'], isTrue);
+  });
+
+  test('世界搜索源能落盘读回', () {
+    final WorldStore store = WorldStore.memory();
+    final World world = DemoData.worlds.first.copyWith(
+      searchSource: WorldSearchSource.tavily,
+    );
+    store.saveWorld(world);
+    final WorldsLoad loaded = store.loadWorlds();
+    expect(loaded.worlds.single.searchSource, WorldSearchSource.tavily);
+  });
+
+  test('未完成回合的恢复日志能存读删', () {
+    final WorldStore s = WorldStore.memory();
+    final TurnSession session = TurnSession(
+      worldId: 'w1',
+      parallelPlaceId: 'l1',
+      rawInput: '我推门进去。',
+      stage: 'GM_ELIGIBILITY',
+      checkpoints: <String, TurnCheckpoint>{
+        'GM_ELIGIBILITY': TurnCheckpoint(
+          stage: 'GM_ELIGIBILITY',
+          data: <String, Object?>{
+            'eligible': <String>['灵梦'],
+          },
+        ),
+      },
+      journal: TurnJournal(
+        responses: <String, String>{'GM_OPEN_PLACE#1': '{"places":[]}'},
+        answers: <String, String>{'GM_OPEN_PLACE#1': '不开'},
+      ),
+      createdAt: '2026-11-17T12:00:00+08:00',
+    );
+    s.saveTurnSession(session);
+    final TurnSession? loaded = s.loadTurnSession('w1');
+    expect(loaded, isNotNull);
+    expect(loaded!.rawInput, '我推门进去。');
+    expect(loaded.stage, 'GM_ELIGIBILITY');
+    expect(loaded.checkpoints['GM_ELIGIBILITY']?.data['eligible'], <String>['灵梦']);
+    expect(loaded.lastCheckpointStage, 'GM_ELIGIBILITY');
+    expect(loaded.journal.responses['GM_OPEN_PLACE#1'], '{"places":[]}');
+    expect(loaded.journal.answers['GM_OPEN_PLACE#1'], '不开');
+    s.clearTurnSession('w1');
+    expect(s.loadTurnSession('w1'), isNull);
+  });
+
+  test('一整份记忆：存了能读回来，覆盖后旧的消失', () {
     final WorldStore s = WorldStore.memory();
     addTearDown(s.close);
     final World w = worldWith('w1');
     s.saveWorld(w);
 
-    s.saveMemories(w.id, <String, MemoryBook>{
-      '': book('', <String>['门是插着的。']),
-      '人物1': book('人物1', <String>['雨声很响。']),
-    });
-    List<MemoryBook> back = s.loadMemories(w.id);
+    s.saveWorldMemory(w.id, <CharacterMemory>[
+      note('m1', '人物1', '门是插着的。'),
+      note('m2', '人物2', '雨声很响。'),
+    ]);
+    List<CharacterMemory> back = s.loadWorldMemory(w.id);
     expect(back.length, 2);
     expect(
-      back.firstWhere((MemoryBook b) => b.ownerId == '').entries.length,
-      1,
+      back.firstWhere((CharacterMemory m) => m.characterId == 'char:人物1').text,
+      '门是插着的。',
     );
 
-    // 第二次只交回来上帝那一本：人物1 那本应当被删掉。
-    s.saveMemories(w.id, <String, MemoryBook>{
-      '': book('', <String>['门是插着的。', '楼梯上有脚步。']),
-    });
-    back = s.loadMemories(w.id);
-    expect(back.length, 1);
-    expect(back.first.ownerId, '');
-    expect(back.first.entries.length, 2, reason: '交回来的整本要原样写进去');
+    // 第二次交回来的是完整一份：只留人物1的两条，人物2那条不再存在。
+    s.saveWorldMemory(w.id, <CharacterMemory>[
+      note('m1', '人物1', '门是插着的。'),
+      note('m3', '人物1', '楼梯上有脚步。'),
+    ]);
+    back = s.loadWorldMemory(w.id);
+    expect(back.length, 2);
+    expect(
+      back.every((CharacterMemory m) => m.characterId == 'char:人物1'),
+      isTrue,
+    );
+    expect(back.last.text, '楼梯上有脚步。');
   });
 
   test('改世界名字（saveWorldMeta）不会动已有的步', () {
@@ -109,8 +180,8 @@ void main() {
     // 内存里把 l1 的最后一步删掉，再整体 saveWorld。
     final WorldsLoad cur = s.loadWorlds();
     final World loaded = cur.worlds.first;
-    final SeqLane l1 = loaded.lanes.firstWhere((SeqLane l) => l.id == 'l1');
-    final SeqLane l2 = loaded.lanes.firstWhere((SeqLane l) => l.id == 'l2');
+    final ParallelPlace l1 = loaded.parallelPlaces.firstWhere((ParallelPlace l) => l.id == 'l1');
+    final ParallelPlace l2 = loaded.parallelPlaces.firstWhere((ParallelPlace l) => l.id == 'l2');
     final World cut = World(
       id: loaded.id,
       name: loaded.name,
@@ -119,8 +190,8 @@ void main() {
       opening: loaded.opening,
       playerName: loaded.playerName,
       characters: loaded.characters,
-      lanes: <SeqLane>[
-        SeqLane(
+      parallelPlaces: <ParallelPlace>[
+        ParallelPlace(
           id: l1.id,
           place: l1.place,
           here: l1.here,
@@ -145,10 +216,10 @@ void main() {
     s.saveCharPlan(
       'w1',
       '人物1',
-      const ModelPlan(byStep: <String, String>{'B2': 'p1\u0000deepseek-chat'}),
+      const ModelPlan(byStep: <String, String>{'CH_ACT': 'p1\u0000deepseek-chat'}),
     );
     var cfg = s.loadCharCfg('w1');
-    expect(cfg.plans['人物1']?.stepKey('B2'), 'p1\u0000deepseek-chat');
+    expect(cfg.plans['人物1']?.stepKey('CH_ACT'), 'p1\u0000deepseek-chat');
 
     // 清空：不设就跟随世界默认。
     s.saveCharPlan('w1', '人物1', const ModelPlan());
@@ -183,23 +254,22 @@ void main() {
     final WorldStore s = WorldStore.memory();
     addTearDown(s.close);
     s.saveWorld(worldWith('w1'));
-    s.saveMemories('w1', <String, MemoryBook>{
-      '': book('', <String>['一']),
-    });
+    s.saveWorldMemory('w1', <CharacterMemory>[
+      note('m1', '人物1', '一'),
+    ]);
     s.saveCharPlan('w1', '人物1', const ModelPlan(defaultRef: 'p1\u0000m'));
 
     s.deleteWorld('w1');
-    expect(s.loadMemories('w1'), isEmpty);
+    expect(s.loadWorldMemory('w1'), isEmpty);
     expect(s.loadCharCfg('w1').plans, isEmpty);
   });
 
-  test('查表用的索引在（v2 迁移建的）', () {
+  test('查表用的索引在', () {
     final WorldStore s = WorldStore.memory();
     addTearDown(s.close);
     s.saveWorld(worldWith('w1'));
 
     final List<String> idx = s.indexNames();
     expect(idx, contains('idx_step_lane'));
-    expect(idx, contains('idx_memory_owner'));
   });
 }

@@ -2,7 +2,7 @@
 //
 // 这一页以前**整个是错的**：搜索服务商下面挂的是聊天接口那一套东西
 // （chat/completions、Use Responses API、端点格式、缓存计价、峰谷价目）。
-// 现在只留搜索真正用得上的：地址、API Key、试搜。
+// 现在只留搜索真正用得上的：地址、API Key、搜索测试。
 
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
@@ -79,7 +79,7 @@ void main() {
       find.text('POST https://api.deepseek.com/v1/tools/fetch'),
       findsOneWidget,
     );
-    expect(find.text('试搜一下'), findsOneWidget);
+    expect(find.text('搜索测试'), findsOneWidget);
 
     // 聊天接口那一套不该出现在搜索服务里。
     expect(find.textContaining('chat/completions'), findsNothing);
@@ -88,7 +88,7 @@ void main() {
     expect(find.textContaining('缓存命中'), findsNothing);
   });
 
-  testWidgets('Tavily 搜索：接口是 /search 和 /extract，计费按 credit', (
+  testWidgets('Tavily 搜索：接口是 /search 和 /extract', (
     WidgetTester t,
   ) async {
     await openSearch(t, <Provider>[tavilySearch]);
@@ -96,17 +96,16 @@ void main() {
     expect(t.takeException(), isNull);
     expect(find.text('POST https://api.tavily.com/search'), findsOneWidget);
     expect(find.text('POST https://api.tavily.com/extract'), findsOneWidget);
-    expect(find.textContaining('API Credit'), findsWidgets);
     // 不再是“还没接”。
     expect(find.textContaining('这家搜索接口还没接'), findsNothing);
-    expect(find.text('试搜一下'), findsOneWidget);
+    expect(find.text('搜索测试'), findsOneWidget);
   });
 
-  testWidgets('没接的搜索厂商：只给地址，并如实说明', (WidgetTester t) async {
+  testWidgets('尚未接入的搜索厂商：只给地址，并如实说明', (WidgetTester t) async {
     await openSearch(t, <Provider>[exaSearch]);
 
     expect(t.takeException(), isNull);
-    expect(find.textContaining('这家搜索接口还没接'), findsOneWidget);
+    expect(find.textContaining('该服务商的搜索接口尚未接入'), findsOneWidget);
     // 也还是不该出现聊天那套。
     expect(find.textContaining('chat/completions'), findsNothing);
     expect(find.text('端点格式'), findsNothing);
@@ -124,7 +123,7 @@ void main() {
     }
 
     // Anthropic 形状：有。（前面那条测已经验过，这里不重复）
-    // MiMo（OpenAI 形状）：也有，且用 MiMo 自己的说法。
+    // MiMo（Chat Completions 形状）：也有，且用 MiMo 自己的说法。
     await open(<Provider>[
       const Provider(
         id: 'mimo',
@@ -152,7 +151,7 @@ void main() {
     expect(find.textContaining('内置搜索'), findsNothing);
   });
 
-  testWidgets('模型服务：Anthropic 格式才有“内置搜索”开关', (WidgetTester t) async {
+  testWidgets('模型服务：DeepSeek 两种形状都有“内置搜索”', (WidgetTester t) async {
     await t.binding.setSurfaceSize(const Size(1200, 800));
     addTearDown(() => t.binding.setSurfaceSize(null));
 
@@ -175,7 +174,8 @@ void main() {
     ]);
     expect(find.textContaining('内置搜索'), findsOneWidget);
 
-    // OpenAI 形状：没有这个开关（chat 的 tools 只收 function）。
+    // Chat Completions 形状：也有。DeepSeek 的 chat/completions 同样支持
+    // deepseek_web_search 与 deepseek_read_url，不是只有 Anthropic 格式才有。
     await open(<Provider>[
       const Provider(
         id: 'm2',
@@ -185,7 +185,7 @@ void main() {
         baseUrl: 'https://api.deepseek.com',
       ),
     ]);
-    expect(find.textContaining('内置搜索'), findsNothing);
+    expect(find.textContaining('内置搜索'), findsOneWidget);
   });
 
   testWidgets('模型服务里那套东西还在（没被误删）', (WidgetTester t) async {

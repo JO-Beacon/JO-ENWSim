@@ -1,12 +1,14 @@
 // 调用层的两种“形状”。
 //
-// DeepSeek 同时提供 OpenAI 形状（/chat/completions）和 Anthropic 形状
+// DeepSeek 同时提供 Chat Completions 形状（/chat/completions）和 Anthropic 形状
 // （/anthropic/messages）。两者**请求体不一样**：
 //   · OpenAI：system 是 messages 里一条；`tools` 只收 function。
 //   · Anthropic：system 是顶层参数；max_tokens 必填；内置搜索是 `tools` 里
 //     一个 server tool；响应 content 是一组块而不是一个字符串。
 //
 // 文档：AGENTS/docs-deepseek/chat-completion.md、guide-anthropic.md
+
+import 'dart:convert';
 
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
@@ -35,7 +37,7 @@ const Provider anthropicWire = Provider(
 );
 
 void main() {
-  test('OpenAI 形状：system 拼进 messages，不加 tools', () {
+  test('Chat Completions 形状：system 拼进 messages，不加 tools', () {
     final LlmRequest req = const LlmRequest(
       model: 'deepseek-flash',
       system: '你是旁白',
@@ -47,6 +49,39 @@ void main() {
     expect((msgs.first! as Map<Object?, Object?>)['role'], 'system');
     expect((msgs.first! as Map<Object?, Object?>)['content'], '你是旁白');
     expect(body.containsKey('tools'), isFalse);
+  });
+
+  test('OpenAI 图片消息：content 是 text + image_url 数组', () {
+    const LlmMessage msg = LlmMessage(
+      'user',
+      '看这张图',
+      images: <LlmImage>[LlmImage(bytes: <int>[1, 2, 3], mime: 'image/png')],
+    );
+    final Map<String, Object?> body = msg.toJson();
+    final List<Object?> parts = body['content']! as List<Object?>;
+    expect(parts.first, <String, Object?>{'type': 'text', 'text': '看这张图'});
+    final Map<Object?, Object?> img = parts[1]! as Map<Object?, Object?>;
+    expect(img['type'], 'image_url');
+    final String url =
+        ((img['image_url']! as Map<Object?, Object?>)['url']!).toString();
+    expect(url, 'data:image/png;base64,${base64Encode(<int>[1, 2, 3])}');
+  });
+
+  test('Anthropic 图片消息：content 是 text + image base64 块', () {
+    const LlmMessage msg = LlmMessage(
+      'user',
+      '看这张图',
+      images: <LlmImage>[LlmImage(bytes: <int>[1, 2, 3], mime: 'image/png')],
+    );
+    final List<Object?> parts = msg.toAnthropicContent();
+    expect(parts.first, <String, Object?>{'type': 'text', 'text': '看这张图'});
+    final Map<Object?, Object?> img = parts[1]! as Map<Object?, Object?>;
+    expect(img['type'], 'image');
+    expect(img['source'], <String, Object?>{
+      'type': 'base64',
+      'media_type': 'image/png',
+      'data': base64Encode(<int>[1, 2, 3]),
+    });
   });
 
   test('Anthropic 形状：system 顶层、max_tokens 必填、内置搜索是 server tool', () {
@@ -156,7 +191,7 @@ void main() {
     expect(r.usage!.cacheMiss, 3);
   });
 
-  test('OpenAI 形状开内置搜索：直接拒绝，不发请求', () async {
+  test('Chat Completions 形状开内置搜索：直接拒绝，不发请求', () async {
     int calls = 0;
     final MockClient c = MockClient((http.Request r) async {
       calls++;
@@ -179,7 +214,7 @@ void main() {
     expect(calls, 0);
   });
 
-  test('OpenAI 形状仍按老样子解析', () async {
+  test('Chat Completions 形状仍按老样子解析', () async {
     final MockClient c = MockClient(
       (http.Request r) async => json(
         '{"choices":[{"message":{"content":"好","reasoning_content":"想"}}],'
@@ -224,7 +259,7 @@ void main() {
     apiPath: '/messages',
   );
 
-  test('MiMo：内置搜索是 OpenAI 形状的 web_search 工具', () {
+  test('MiMo：内置搜索是 Chat Completions 形状的 web_search 工具', () {
     expect(mimo.builtinSearchShape, BuiltinSearch.mimo);
     const LlmRequest req = LlmRequest(
       model: 'mimo-v2.6-pro',
@@ -324,8 +359,10 @@ void main() {
     expect(calls, 0);
   });
 
-  test('形状按地址认：MiMo 是 mimo，DeepSeek 的 Anthropic 是 anthropic', () {
+  test('形状按地址认：MiMo 是 mimo，DeepSeek 两种形状都是 deepseek', () {
     expect(mimo.builtinSearchShape, BuiltinSearch.mimo);
+    // DeepSeek 有自己的联网工具（deepseek_web_search / deepseek_read_url），
+    // 两种协议都支持，所以不再落到通用的 anthropic 形状上。
     expect(
       const Provider(
         id: 'd',
@@ -333,8 +370,17 @@ void main() {
         name: 'DeepSeek',
         baseUrl: 'https://api.deepseek.com',
       ).builtinSearchShape,
-      BuiltinSearch.none,
+      BuiltinSearch.deepseek,
     );
-    expect(anthropicWire.builtinSearchShape, BuiltinSearch.anthropic);
+    expect(anthropicWire.builtinSearchShape, BuiltinSearch.deepseek);
+    // 别家的 Anthropic 形状仍然走通用那条（web_search_20250305）。
+    expect(
+      const Provider(
+        id: 'c',
+        protocol: Protocol.claude,
+        name: 'Claude',
+      ).builtinSearchShape,
+      BuiltinSearch.anthropic,
+    );
   });
 }

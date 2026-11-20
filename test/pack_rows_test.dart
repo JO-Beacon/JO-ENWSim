@@ -8,25 +8,25 @@ import 'package:joenws/model/demo.dart';
 import 'package:joenws/model/pack_rows.dart';
 import 'package:joenws/model/turn.dart';
 
-SeqLane lane(String id, int steps) => SeqLane(
+ParallelPlace place(String id, int steps) => ParallelPlace(
   id: id,
   place: id,
   here: false,
   events: <TurnStep>[
-    for (int i = 0; i < steps; i++) TurnStep(kind: 'A1', text: '$id#$i'),
+    for (int i = 0; i < steps; i++) TurnStep(kind: 'GM_ENV_UPDATE', text: '$id#$i'),
   ],
 );
 
 /// 每条换地点线都得满足：①线是往下走的；②起点列里，源卡和目标行之间没有卡。
 void expectChannelsClear(
-  List<SeqLane> lanes,
+  List<ParallelPlace> parallelPlaces,
   List<MoveLink> moves,
   Map<String, List<int>> rows,
 ) {
   for (final MoveLink m in moves) {
-    final List<int> src = rows[m.fromLane]!;
+    final List<int> src = rows[m.fromParallelPlace]!;
     final int sr = src[m.fromStep];
-    final int dr = rows[m.toLane]![m.toStep];
+    final int dr = rows[m.toParallelPlace]![m.toStep];
 
     expect(dr, greaterThan(sr), reason: '换地点线不能往上穿过起点列里更早的卡');
 
@@ -44,52 +44,52 @@ void expectChannelsClear(
 void main() {
   test('demo 世界：默认错行，只有后巷被推下一格', () {
     final World w = DemoData.worlds.first;
-    final Map<String, List<int>> rows = packRows(w.lanes, w.moves);
+    final Map<String, List<int>> rows = packRows(w.parallelPlaces, w.moves);
 
     expect(rows['l1'], <int>[0, 1, 2, 3, 4]);
     expect(rows['l2'], <int>[0, 1, 2]);
     // 人物3 从仓房绕到后巷、再回正厅：后巷第 2 步要让出竖段，所以推到第 3 行。
     expect(rows['l3'], <int>[0, 1, 3]);
-    expectChannelsClear(w.lanes, w.moves, rows);
+    expectChannelsClear(w.parallelPlaces, w.moves, rows);
   });
 
   test('竖段被起点列后面的卡挡住：该列整体下移', () {
-    final List<SeqLane> lanes = <SeqLane>[lane('A', 3), lane('B', 3)];
+    final List<ParallelPlace> parallelPlaces = <ParallelPlace>[place('A', 3), place('B', 3)];
     final List<MoveLink> moves = <MoveLink>[
-      const MoveLink(fromLane: 'A', fromStep: 0, toLane: 'B', toStep: 2),
+      const MoveLink(fromParallelPlace: 'A', fromStep: 0, toParallelPlace: 'B', toStep: 2),
     ];
 
-    final Map<String, List<int>> rows = packRows(lanes, moves);
+    final Map<String, List<int>> rows = packRows(parallelPlaces, moves);
 
     // A 的第 1 步原本在行 1，正好卡在 0 → 2 的竖线中间，只能让路。
     expect(rows['A'], <int>[0, 2, 3]);
     expect(rows['B'], <int>[0, 1, 2]);
-    expectChannelsClear(lanes, moves, rows);
+    expectChannelsClear(parallelPlaces, moves, rows);
   });
 
   test('往上走的换地点：目标行被压到起点行下面', () {
-    final List<SeqLane> lanes = <SeqLane>[lane('A', 3), lane('B', 3)];
+    final List<ParallelPlace> parallelPlaces = <ParallelPlace>[place('A', 3), place('B', 3)];
     final List<MoveLink> moves = <MoveLink>[
-      const MoveLink(fromLane: 'A', fromStep: 2, toLane: 'B', toStep: 0),
+      const MoveLink(fromParallelPlace: 'A', fromStep: 2, toParallelPlace: 'B', toStep: 0),
     ];
 
-    final Map<String, List<int>> rows = packRows(lanes, moves);
+    final Map<String, List<int>> rows = packRows(parallelPlaces, moves);
 
     expect(rows['A'], <int>[0, 1, 2]);
     // 目标行要越过起点行（2），所以 B 整列从第 3 行起。
     expect(rows['B'], <int>[3, 4, 5]);
-    expectChannelsClear(lanes, moves, rows);
+    expectChannelsClear(parallelPlaces, moves, rows);
   });
 
   test('插不通不会死循环（轮数用完就认）', () {
-    final List<SeqLane> lanes = <SeqLane>[lane('A', 2), lane('B', 2)];
+    final List<ParallelPlace> parallelPlaces = <ParallelPlace>[place('A', 2), place('B', 2)];
     final List<MoveLink> moves = <MoveLink>[
-      const MoveLink(fromLane: 'A', fromStep: 1, toLane: 'B', toStep: 0),
-      const MoveLink(fromLane: 'B', fromStep: 1, toLane: 'A', toStep: 0),
+      const MoveLink(fromParallelPlace: 'A', fromStep: 1, toParallelPlace: 'B', toStep: 0),
+      const MoveLink(fromParallelPlace: 'B', fromStep: 1, toParallelPlace: 'A', toStep: 0),
     ];
 
     // 只要求它能返回、且行号都非负；两条线互相顶的时候不保证都不穿卡。
-    final Map<String, List<int>> rows = packRows(lanes, moves, maxPass: 4);
+    final Map<String, List<int>> rows = packRows(parallelPlaces, moves, maxPass: 4);
     expect(rows['A'], hasLength(2));
     expect(rows['B'], hasLength(2));
     expect(

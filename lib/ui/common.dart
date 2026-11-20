@@ -184,11 +184,16 @@ class JoSegment<T> extends StatelessWidget {
     required this.options,
     required this.value,
     required this.onChanged,
+    this.enabled = true,
   });
 
   final List<({String label, T value})> options;
   final T value;
   final ValueChanged<T> onChanged;
+
+  /// 不可用：照常显示，但点不动、颜色变淡。
+  /// 用它区别于“干脆不显示”——用户要知道有这个选项、以及为什么暂时用不了。
+  final bool enabled;
 
   @override
   Widget build(BuildContext context) {
@@ -206,10 +211,12 @@ class JoSegment<T> extends StatelessWidget {
 
   Widget _cell(BuildContext context, JoPalette p, ({String label, T value}) o) {
     final bool on = o.value == value;
+    final bool hot = enabled && on;
     return JoTap(
-      onTap: () => onChanged(o.value),
+      onTap: enabled ? () => onChanged(o.value) : () {},
       opaque: false,
       builder: (BuildContext context, bool hover, bool down) {
+        final bool live = enabled && (hover || down);
         return AnimatedContainer(
           duration: kJoTapMs,
           curve: Curves.easeOut,
@@ -218,18 +225,22 @@ class JoSegment<T> extends StatelessWidget {
             vertical: JoSpace.s1 + 2,
           ),
           decoration: BoxDecoration(
-            color: on
+            color: hot
                 ? p.surface
-                : (hover
+                : (live
                       ? p.surface.withValues(alpha: 0.6)
                       : Colors.transparent),
-            border: JoShape.border(on || hover ? p.accent : p.border),
+            border: JoShape.border(hot || live ? p.accent : p.border),
             borderRadius: JoShape.br,
           ),
           child: AnimatedDefaultTextStyle(
             duration: kJoTapMs,
             curve: Curves.easeOut,
-            style: JoFonts.meta.copyWith(color: on ? p.accent : p.secondary),
+            style: JoFonts.meta.copyWith(
+              color: !enabled
+                  ? p.secondary.withValues(alpha: 0.45)
+                  : (on ? p.accent : p.secondary),
+            ),
             child: Text(o.label),
           ),
         );
@@ -321,8 +332,10 @@ class JoField extends StatelessWidget {
                 ),
             ],
           ),
-          const Spacer(),
-          child,
+          const SizedBox(width: JoSpace.s3),
+          Expanded(
+            child: Align(alignment: Alignment.centerRight, child: child),
+          ),
         ],
       ),
     );
@@ -577,6 +590,7 @@ class JoTextField extends StatefulWidget {
     this.hintStyle,
     this.obscureText = false,
     this.autofocus = false,
+    this.readOnly = false,
     this.onChanged,
     this.onSubmitted,
     this.maxLines = 1,
@@ -591,6 +605,10 @@ class JoTextField extends StatefulWidget {
   final TextStyle? hintStyle;
   final bool obscureText;
   final bool autofocus;
+
+  /// 只读：显示、能选中复制，但打不进字。没有操控角色时用它保留输入框。
+  final bool readOnly;
+
   final ValueChanged<String>? onChanged;
   final ValueChanged<String>? onSubmitted;
 
@@ -671,6 +689,7 @@ class _JoTextFieldState extends State<JoTextField> {
         maxLines: widget.maxLines,
         minLines: widget.minLines,
         obscureText: widget.obscureText,
+        readOnly: widget.readOnly,
         style: widget.style,
         placeholder: widget.hint,
         placeholderStyle:
