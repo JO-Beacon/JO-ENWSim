@@ -19,7 +19,7 @@ import 'model_plan.dart';
 // 所以两边共用的是**同一个 id 空间**，定义仍然只有一份。
 
 /// 这个步骤 id 认不认得。
-bool isKnownStep(String id) => kSteps.any((StepKind s) => s.id == id);
+bool isKnownStep(String id) => kKnownSteps.any((StepKind s) => s.id == id);
 
 /// 一个回合。
 class TurnStep {
@@ -86,11 +86,13 @@ class TurnStep {
 
   /// 序列画布上会不会出现这一步。
   ///
-  /// 一步 = **一次行为**。环境更新（GM_ENV_UPDATE）与角色行为（CH_ACT）上画布；
+  /// 一步 = **一次行为**。环境更新（GM_ENV_UPDATE）、角色行动（CH_ACT）与
+  /// 意图回合的意图（CH_INTENT）上画布；
   /// GM_OPEN_PLACE/GM_MERGE_PLACE 的开启/合并也上画布，否则新开的并行地点会是一列空白。
   /// 其余（GM_ROUTE / GM_ELIGIBILITY / GM_SELECT_ACTOR / CH_PERCEIVE）是判断或过程，留在库里可追溯，但不占画布。
   bool get showsOnCanvas =>
-      kind == 'GM_ENV_UPDATE' || kind == 'CH_ACT' || kind == 'GM_OPEN_PLACE' || kind == 'GM_MERGE_PLACE';
+      kind == 'GM_ENV_UPDATE' || kind == 'CH_ACT' || kind == 'CH_INTENT' ||
+      kind == 'GM_OPEN_PLACE' || kind == 'GM_MERGE_PLACE';
 
   Map<String, Object?> toJson() => <String, Object?>{
     'kind': kind,

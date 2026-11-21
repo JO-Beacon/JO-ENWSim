@@ -2709,11 +2709,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       }
       if (trace.openPlaceErrors.isNotEmpty ||
           trace.routeErrors.isNotEmpty ||
-          trace.castErrors.isNotEmpty ||
-          trace.selectActorErrors.isNotEmpty ||
           trace.environmentErrors.isNotEmpty ||
           trace.perceiveErrors.isNotEmpty ||
-          trace.resolveErrors.isNotEmpty ||
           (trace.stop != null && trace.stop!.code != 'player_action')) {
         final StopPoint stop = StopPoint(
           reason: 'error',
@@ -3870,6 +3867,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         scene: scene,
         memoryStore: memory,
         agents: runner,
+        intentAgents: runner,
         causalContext: causalContext,
         constraints: prior.constraints,
         entityNames: prior.entities.values
@@ -3878,9 +3876,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
             .toList(),
         pov: run.pov,
         deferPresentation: versioned,
-        contestDecider: scope == null ? runner.adjudicateContest : null,
         responseRevisions: appliedRevisions,
-        actorsDue: auto || scope != null ? (List<String> eligible) => work.actorsDue(parallelPlaceId, eligible) : null,
+        actorsDue: (List<String> eligible) => work.actorsDue(parallelPlaceId, eligible),
         openPlaceDecider: runner.decideOpenParallelPlace,
         routeDecider: timeBoundaryPass
             ? ({required NarrativeScene scene, required List<WorldEvent> events, List<String>? errors, String? previous}) async => 'env'
@@ -3930,7 +3927,6 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
             ),
           ];
         },
-        castDecider: runner.decideCast,
         mergePlaceDecider: runner.decideMerge,
         rCheck: runner.checkRender,
         sceneForPlace: (String place) => adapter.scene(atPlace: place),
@@ -3989,6 +3985,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
           final String? responseKey = runner.lastResponseKey;
           final bool trackResponse = responseKey != null && <String>{
             StepId.chMemoryWrite, StepId.chAct, StepId.gmObserveScene, StepId.gmResolveAction,
+            StepId.chIntent, StepId.gmFileClaim, StepId.gmResolveBeat, StepId.gmOutcomeView,
           }.contains(StepId.base(stage)) && responseKey.startsWith('${StepId.base(stage)}#');
           final TurnSession updated = current.withCheckpoint(stage, <String, Object?>{
             ...data,
@@ -4229,7 +4226,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
         final String turnTimeLabel =
             trace.events.isEmpty ? '' : trace.events.first.timeLabel.trim();
         final TurnStep mainStep = TurnStep(
-          kind: trace.events.isEmpty ? 'GM_ENV_UPDATE' : 'CH_ACT',
+          kind: trace.events.isEmpty
+              ? 'GM_ENV_UPDATE'
+              : (trace.intentBeat ? 'CH_INTENT' : 'CH_ACT'),
           who: trace.events.isEmpty ? '旁白' : chosen,
           time: turnTimeLabel,
           text: versioned ? '本回合已结算，正文待生成。'
@@ -4238,7 +4237,9 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
           chosen: chosen,
           judgment: trace.events.isEmpty
               ? '引擎：GM_ROUTE 走环境更新，GM_ENV_UPDATE 生成环境事件'
-              : '引擎：GM_SELECT_ACTOR 从 ${trace.eligible.join('、')} 中选中 $chosen',
+              : trace.intentBeat
+                  ? '引擎：轮流到 $chosen，提交意图后由裁决结算'
+                  : '引擎：GM_SELECT_ACTOR 从 ${trace.eligible.join('、')} 中选中 $chosen',
           attachmentIds: attachmentIds,
           perceptions: <String, String>{
             for (final MapEntry<String, Map<String, Object?>> e
@@ -4579,11 +4580,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     }
     if (trace.openPlaceErrors.isNotEmpty ||
         trace.routeErrors.isNotEmpty ||
-        trace.castErrors.isNotEmpty ||
-        trace.selectActorErrors.isNotEmpty ||
         trace.environmentErrors.isNotEmpty ||
         trace.perceiveErrors.isNotEmpty ||
-        trace.resolveErrors.isNotEmpty ||
         trace.stop != null) {
       return StopPoint(
         reason: 'error',
@@ -4756,24 +4754,14 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
           ? '角色回合'
           : t.openPlaceErrors.isNotEmpty
           ? '未决定（GM_OPEN_PLACE 输出不合格）'
-          : t.castErrors.isNotEmpty
-          ? '未决定（GM_ELIGIBILITY 输出不合格）'
-          : t.selectActorErrors.isNotEmpty
-          ? '未决定（GM_SELECT_ACTOR 输出不合格）'
           : '未决定（GM_ROUTE 输出不合格）'}',
     );
     if (t.routeErrors.isNotEmpty) {
       b.writeln('GM_ROUTE 校验：${t.routeErrors.join('；')}');
     }
-    if (t.castErrors.isNotEmpty) {
-      b.writeln('GM_ELIGIBILITY 校验：${t.castErrors.join('；')}');
-    }
-    if (t.selectActorErrors.isNotEmpty) {
-      b.writeln('GM_SELECT_ACTOR 校验：${t.selectActorErrors.join('；')}');
-    }
-    b.writeln('GM_CAST 在场名单：${t.cast.join('、')}');
-    b.writeln('GM_ELIGIBILITY 行动资格：${t.eligible.join('、')}');
-    b.writeln('GM_SELECT_ACTOR 选中：${t.chosen ?? '（没有选出人）'}');
+    b.writeln('在场角色：${t.cast.join('、')}');
+    b.writeln('本拍可行动：${t.eligible.join('、')}');
+    b.writeln('本拍行动者：${t.chosen ?? '（没有选出人）'}');
     b.writeln(
       'GM_MERGE_PLACE 合并：${t.mergePlace.merge}'
       '${t.mergePlace.into.isEmpty ? '' : '（并入：${_parallelPlaceLabel(t.mergePlace.into)}）'}'
@@ -4785,7 +4773,7 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
       );
     }
     if (t.arbitration != null) {
-      b.writeln('GM_RESOLVE_ACTION：${jsonEncode(t.arbitration)}');
+      b.writeln('GM_RESOLVE_BEAT：${jsonEncode(t.arbitration)}');
     }
     if (t.perceiveErrors.isNotEmpty) {
       b.writeln('CH_PERCEIVE 校验：${t.perceiveErrors.join('；')}');
@@ -4793,11 +4781,8 @@ class _WorkspaceState extends State<Workspace> with TickerProviderStateMixin {
     if (t.environmentErrors.isNotEmpty) {
       b.writeln('GM_ENV_UPDATE 校验：${t.environmentErrors.join('；')}');
     }
-    if (t.resolveErrors.isNotEmpty) {
-      b.writeln('GM_RESOLVE_ACTION 校验：${t.resolveErrors.join('；')}');
-    }
     if (t.needsReview) {
-      b.writeln('需要人工看：GM_RESOLVE_ACTION unresolved 或 GM_REVIEW_NARRATION 警告。');
+      b.writeln('需要人工看：裁决未决或正文复核有警告。');
     }
     if (t.blocked.isNotEmpty) {
       b.writeln(

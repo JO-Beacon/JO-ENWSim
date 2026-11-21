@@ -1,15 +1,10 @@
 import 'package:flutter_test/flutter_test.dart';
-import 'package:joenws/engine/causal_context.dart';
 import 'package:joenws/engine/engine_state.dart';
 import 'package:joenws/engine/local_turn_scope.dart';
 import 'package:joenws/engine/perception.dart';
-import 'package:joenws/engine/sequence.dart';
 import 'package:joenws/engine/state_delta.dart';
-import 'package:joenws/engine/turn_loop.dart';
 import 'package:joenws/engine/world_schedule.dart';
 import 'package:joenws/model/demo.dart';
-
-import 'engine_turn_loop_test.dart' show FakeAgents;
 
 const Delivery _delivery = Delivery(
   channel: DeliveryChannel.visual, form: 'gesture', audience: Audience.scene,
@@ -42,30 +37,6 @@ const TurnState _contestBase = TurnState(
     FactRecord(id: 'hatch', subject: 'key', predicate: 'shared_access', object: '仓房'),
   ],
 );
-
-NarrativeScene _scene(String place) {
-  final String actor = place == '酒馆' ? '慧音' : '灵梦';
-  return NarrativeScene(
-    place: place,
-    names: <String, String>{'char:$actor': actor, 'key': '钥匙'},
-    cast: <CharacterSnapshot>[CharacterSnapshot(id: 'char:$actor', name: actor, nearby: true)],
-  );
-}
-
-Map<String, Object?> _take(String actor) => <String, Object?>{
-  'segments': <Object?>[
-    <String, Object?>{
-      'kind': 'action', 'action_kind': 'take', 'text': '伸手取钥匙。', 'target': null,
-      'delivery': <String, Object?>{'channel': 'visual', 'form': 'gesture', 'audience': 'scene'},
-      'requires': <String>[], 'perceivable_by': <String>[],
-    },
-  ],
-  'state_delta': <String, Object?>{
-    'items': <Object?>[
-      <String, Object?>{'kind': 'take', 'item_id': 'key', 'from': '酒馆', 'to': actor},
-    ],
-  },
-};
 
 void main() {
   test('独立地点只看自己的历史，共享物品或跨地见闻要求串行', () {
@@ -219,107 +190,4 @@ void main() {
     expect(schedule.readyPlaces(world, powered).map((p) => p.id), <String>['a', 'b']);
   });
 
-  test('有共享通路的两地争同一件物品，只结算一个归属', () async {
-    final FakeAgents agents = FakeAgents(
-      choices: <String>['慧音'], actions: <Map<String, Object?>>[_take('慧音'), _take('灵梦')],
-    );
-    final TurnTrace result = await TurnLoop(
-      scene: _scene('酒馆'), agents: agents, deferPresentation: true,
-      causalContext: const CausalContext(state: _contestBase),
-      otherParallelPlaces: const <ParallelPlaceInfo>[
-        ParallelPlaceInfo(id: 'b', place: '仓房', members: <String>['灵梦']),
-      ],
-      sceneForPlace: _scene,
-      contestDecider: (item, attempts, errors) async {
-        expect(item, 'key');
-        expect(attempts.map((attempt) => attempt['place']), ['酒馆', '仓房']);
-        return <String, Object?>{'winner': '灵梦', 'outcome': 'resolved', 'reason': '仓房一侧先够到。'};
-      },
-    ).run(newEvents: [], actorNames: ['慧音']);
-    expect(result.arbitration?['winner'], '灵梦');
-    expect(result.events.map((event) => event.outcome), ['failure', 'success']);
-    expect(result.events.map((event) => event.turnIndex).toSet(), hasLength(1));
-    expect(result.events.last.witnesses.map((witness) => witness.characterId), isNot(contains('char:慧音')));
-    final TurnState settled = _contestBase.applyDelta(result.stateDelta!);
-    expect(settled.entities['key']!.location, '灵梦');
-    expect(settled.inventories, <String, List<String>>{'灵梦': ['key']});
-  });
-
-  test('远处争用轮到人控角色时，在提交任何结果前等待玩家', () async {
-    final TurnTrace result = await TurnLoop(
-      scene: _scene('酒馆'),
-      agents: FakeAgents(choices: ['慧音'], action: _take('慧音')),
-      causalContext: const CausalContext(state: _contestBase),
-      controlledCharacter: '灵梦',
-      otherParallelPlaces: const <ParallelPlaceInfo>[
-        ParallelPlaceInfo(id: 'b', place: '仓房', members: <String>['灵梦']),
-      ],
-      sceneForPlace: _scene,
-      contestDecider: (_, _, _) async => throw StateError('玩家还没回应，不应裁定。'),
-    ).run(newEvents: [], actorNames: ['慧音']);
-    expect(result.stop?.code, 'player_action');
-    expect(result.events, isEmpty);
-  });
-
-  for (final bool ordered in <bool>[false, true]) {
-  test(ordered ? '多项依赖按已知时序结算并逐项检查前提' : '对同一扇门的互斥尝试只提交一种结果', () async {
-    final NarrativeScene scene = NarrativeScene(place: '仓房', cast: <CharacterSnapshot>[
-      CharacterSnapshot(id: 'char:甲', name: '甲', nearby: true),
-      CharacterSnapshot(id: 'char:乙', name: '乙', nearby: true),
-    ], names: <String, String>{'char:甲': '甲', 'char:乙': '乙', 'door': '仓门'});
-    final TurnState base = TurnState(events: const [], entities: const <String, EntityRecord>{
-      'door': EntityRecord(id: 'door', kind: 'other', name: '仓门', location: '仓房'),
-    }, facts: <FactRecord>[
-      const FactRecord(id: 'door-position', subject: 'door', predicate: 'open_state', object: 'ajar'),
-      if (ordered) ...const <FactRecord>[
-        FactRecord(id: 'door-bar', subject: 'door', predicate: 'latched', object: 'true'),
-        FactRecord(id: 'first', subject: 'door', predicate: 'time_boundary', object: '解闩', evidence: '先检查门闩。'),
-        FactRecord(id: 'second', subject: 'door', predicate: 'time_boundary', object: '验门', evidence: '检查完后再试门。'),
-        FactRecord(id: 'order', subject: 'first', predicate: 'time_before', object: 'second'),
-      ],
-    ]);
-    Map<String, Object?> attempt(String state, String text, {bool earlier = false}) => <String, Object?>{
-      if (ordered) 'time_boundary_id': earlier ? 'first' : 'second',
-      if (ordered && !earlier) 'preconditions': <Object?>[
-        <String, Object?>{'subject': 'door', 'predicate': 'latched', 'object': 'false'},
-      ],
-      'segments': <Object?>[
-        <String, Object?>{
-          'kind': 'action', 'action_kind': 'gesture', 'text': text,
-          'delivery': <String, Object?>{'channel': 'visual', 'form': 'gesture', 'audience': 'scene'},
-          'requires': <String>[], 'perceivable_by': <String>[],
-        },
-      ],
-      'state_delta': <String, Object?>{
-        'facts': <Object?>[
-          StateFactDelta(subject: 'door', predicate: 'open_state', object: state,
-              evidence: text, visibility: 'public').toJson(),
-          if (ordered && earlier) const StateFactDelta(subject: 'door', predicate: 'latched',
-              object: 'false', evidence: '拨开门闩。', visibility: 'public').toJson(),
-        ],
-      },
-    };
-    final TurnTrace result = await TurnLoop(
-      scene: scene,
-      agents: FakeAgents(choices: [ordered ? '乙' : '甲'], actions: ordered
-          ? [attempt('closed', '关上仓门。'), attempt('open', '拨开门闩并推开仓门。', earlier: true)]
-          : [attempt('open', '推开仓门。'), attempt('closed', '关上仓门。')]),
-      causalContext: CausalContext(state: base), deferPresentation: true,
-      contestDecider: (subject, attempts, errors) async {
-        expect(ordered, isFalse, reason: '现有时间关系和可验证前提足以确定顺序。');
-        expect(subject, 'door');
-        expect(attempts.map((a) => a['contested_property']), ['open_state', 'open_state']);
-        return <String, Object?>{'winner': '乙', 'outcome': 'resolved'};
-      },
-    ).run(newEvents: [], actorNames: ['甲', '乙']);
-    expect(result.events.map((event) => event.actor), <String>['char:甲', 'char:乙']);
-    expect(result.events.map((event) => event.outcome), [ordered ? 'success' : 'failure', 'success']);
-    TurnState settled = base;
-    for (final StateDelta delta in result.orderedDeltas) {
-      settled = settled.applyDelta(delta);
-    }
-    expect(settled.facts.singleWhere((fact) => fact.predicate == 'open_state').object, 'closed');
-    if (ordered) expect(settled.facts.singleWhere((fact) => fact.predicate == 'latched').object, 'false');
-  });
-  }
 }

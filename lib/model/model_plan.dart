@@ -33,32 +33,28 @@ const Map<String, String> kDefaultPrompts = <String, String>{
       '把世界自身的事件往前推一步。'
       '不要写任何角色的主动行为——那是角色回合的事。'
       '时间标签用文本（比如“入夜之后”），不要用时间戳。',
-  StepId.gmCast: '从当前现场已知角色中确定在场名单，不能添加未知角色。',
   StepId.gmObserveScene: '依据当前环境、遮挡和角色状态，分别给出每个角色此刻可以感知的现场。'
       '隐藏事实、容器内部、他人内心和已经过去的事件不能因来到现场而自动获知。',
-  StepId.gmEligibility: '判断这一步有资格行动的角色。只能从程序给出的基础名单中排除角色。',
-  StepId.gmSelectActor:
-      '据每个参与角色各自感知到的内容，'
-      '挑唯一一个该行动的角色。只能从参与者里挑。',
   StepId.gmMergePlace:
       '判断这条序列要不要和别的序列合并。'
       '两边已经汇到同一处、分开写反而零碎，就该合；否则保持原样。'
       '把判断与一句理由写出来。',
-  StepId.chPerceive:
-      '写出这个角色此刻感知到了什么。'
-      '只能写它能知道的：看得见、听得见、摸得着的。'
-      '不要写它的想法或决定（那是下一步的事），也不要写别人的内心。',
-  StepId.chAct:
-      '写出这个角色这一步的行为。'
-      '一行到几句话，写它做了什么、说了什么，不要写别人的反应。'
-      '时间标签用文本，不要用时间戳。',
+  StepId.chIntent:
+      '依据这个角色此刻的见闻、想得起的记忆和自身状态，直接写出它想做什么。'
+      '意图是请求，不是结果；不要写别人会怎么反应，也不要写“我成功了”。',
+  StepId.gmFileClaim:
+      '把私人意图转成公开主张。只留身体要做什么，去掉动机、回忆和盘算；'
+      '永远是“试图”。你可以用客观场面理解指称，但不能把角色不知道的名字、事实或秘密写进主张。',
+  StepId.gmResolveBeat:
+      '结算这一拍的行动意图：依据位置、伤势、装备、约束和进行中的过程，'
+      '给出成 / 败 / 部分 / 未定，并逐人写出他们能感知到的那份。',
+  StepId.gmOutcomeView:
+      '把已经裁定的客观结果翻成某个角色此刻能感知到的那份。'
+      '只写它看得见、听得见、摸得着的东西；不写别人的内心，不写它不知道的事实。',
   StepId.chMemoryWrite:
       '整理这个角色自己的第一人称记忆。只能使用 encode / reinforce / compress / reinterpret / archive，'
       '不能写事件、事实或别人的记忆。',
-  StepId.chMemoryRecall:
-      '只从这个角色自己的记忆里，选出此刻会想起的条目；不能编造 id。',
   StepId.gmParseInput: '解析玩家原文，不改写原意；未决信息请向玩家本人澄清。',
-  StepId.gmResolveAction: '依据世界规则和当前权威状态裁定这一个行动，区分客观结果与各角色见闻。',
   StepId.gmNarrate: '仅依据已接受事件生成正文，行动尝试的实际结果以裁定为准。',
   StepId.gmReviewNarration: '检查正文是否增加事件之外的动作、反应、心理或因果，只报告问题。',
 };
@@ -68,6 +64,9 @@ String kDefaultPromptOf(String id) => kDefaultPrompts[id] ?? '';
 
 /// 展示、提示词和逐步模型配置共用正式步骤清单。
 const List<StepKind> kSteps = kAiSteps;
+
+/// 读旧存档时认识的步骤；新流程、设置和提示词编辑只看 [kSteps]。
+const List<StepKind> kKnownSteps = <StepKind>[...kAiSteps, ...kLegacySteps];
 
 /// 一次模型选择：哪个服务商下的哪个模型。
 ///

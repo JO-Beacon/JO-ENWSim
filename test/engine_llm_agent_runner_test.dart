@@ -6,7 +6,6 @@ import 'package:joenws/engine/perception.dart';
 import 'package:joenws/engine/player_input.dart';
 import 'package:joenws/engine/sequence.dart';
 import 'package:joenws/engine/turn_loop.dart';
-import 'package:joenws/engine/turn_session.dart';
 import 'package:joenws/model/llm_client.dart';
 import 'package:joenws/model/provider.dart';
 
@@ -112,72 +111,6 @@ void main() {
     expect(ids, <String>['cm-1']);
   });
 
-  test('selectEligible 只返回名字列表', () async {
-    final LlmAgentRunner runner = _runner((LlmRequest req) async {
-      return const LlmReply(
-        text: '{"eligible":["灵梦","慧音"],"excluded":[]}',
-      );
-    });
-    final List<String> eligible = await runner.selectEligible(
-      baseEligible: <String>['灵梦', '艾琳', '魔理沙', '慧音'],
-      cast: <String>['信标', '灵梦', '艾琳', '魔理沙', '慧音'],
-    );
-    expect(eligible, <String>['灵梦', '慧音']);
-  });
-
-  test('selectActor 解析 chosen', () async {
-    final LlmAgentRunner runner = _runner((LlmRequest req) async {
-      return const LlmReply(text: '{"chosen":"慧音","why":"她被点名。"}');
-    });
-    final String? chosen = await runner.selectActor(
-      eligible: <String>['灵梦', '慧音'],
-      percepts: <String, Map<String, Object?>>{},
-    );
-    expect(chosen, '慧音');
-  });
-
-  test('act 把角色卡放进 system，并解析行动记录', () async {
-    final LlmAgentRunner runner = _runner((LlmRequest req) async {
-      expect(req.system, contains('博丽神社的巫女'));
-      expect(req.system, isNot(contains('【灵梦】记得')));
-      expect(req.messages.single.content, contains('【灵梦】记得'));
-      return const LlmReply(
-        text:
-            '{"intent":"回应","segments":[{"kind":"speech","text":"我听见了。","target":"信标","delivery":{"channel":"voice","form":"spoken","audience":"scene"},"manner":null,"action_kind":null,"requires":["speak"],"perceivable_by":[]}],"manner":"平静"}',
-      );
-    });
-    final Map<String, Object?> out = await runner.act(
-      name: '灵梦',
-      context: '【灵梦】记得……',
-      perceive: '{"percepts":[]}',
-      present: <String>['信标', '灵梦', '艾琳', '魔理沙', '慧音'],
-    );
-    expect(out['intent'], '回应');
-    expect((out['segments'] as List).length, 1);
-  });
-
-  test('adjudicate 解析 outcome/deltas', () async {
-    final LlmAgentRunner runner = _runner((LlmRequest req) async {
-      expect(req.system, contains('裁定'));
-      expect(req.system, isNot(contains('左肩包扎')));
-      expect(req.messages.single.content, contains('左肩包扎'));
-      expect(req.messages.single.content, contains('信标'));
-      return const LlmReply(
-        text:
-            '{"outcome":"success","deltas":[{"kind":"steal","item_id":"item:kit","from":"char:信标","to":"char:魔理沙"}],"reason":"够得着。"}',
-      );
-    });
-    final Map<String, Object?> out = await runner.adjudicate(
-      action: <String, Object?>{'intent': '抢急救包'},
-      actor: '魔理沙',
-      target: '信标',
-      place: '东门内侧',
-      present: <String>['信标', '魔理沙'],
-    );
-    expect(out['outcome'], 'success');
-    expect((out['deltas'] as List).length, 1);
-  });
-
   test('render 解析 public_text', () async {
     final LlmAgentRunner runner = _runner((LlmRequest req) async {
       return const LlmReply(
@@ -193,14 +126,16 @@ void main() {
   test('带代码块的 JSON 也能解析', () async {
     final LlmAgentRunner runner = _runner((LlmRequest req) async {
       return const LlmReply(
-        text: '```json\n{"chosen":"灵梦","why":"她先被搭话。"}\n```',
+        text: '```json\n{"intent_id":"i1","actor":"char:灵梦","text":"我想看看门外"}\n```',
       );
     });
-    final String? chosen = await runner.selectActor(
-      eligible: <String>['灵梦'],
-      percepts: <String, Map<String, Object?>>{},
+    final intent = await runner.intend(
+      actor: '灵梦',
+      delivered: '',
+      recalled: '',
+      present: <String>['灵梦'],
     );
-    expect(chosen, '灵梦');
+    expect(intent.text, '我想看看门外');
   });
 
   test('非 JSON 输出会重试，第二次成功', () async {
@@ -220,30 +155,6 @@ void main() {
     );
     expect(calls, 2);
     expect(out['attention'], '重试成功');
-  });
-
-  test('有恢复日志时回放 AI 返回，不再请求模型', () async {
-    int calls = 0;
-    final LlmAgentRunner runner = LlmAgentRunner(
-      provider: _provider,
-      apiKey: 'test-key',
-      model: 'test-model',
-      sender: (LlmRequest req) async {
-        calls++;
-        return const LlmReply(text: '{"eligible":[]}');
-      },
-      journal: TurnJournal(
-        responses: <String, String>{
-          'GM_ELIGIBILITY#1': '{"eligible":["灵梦"]}',
-        },
-      ),
-    );
-    final List<String> out = await runner.selectEligible(
-      baseEligible: <String>['灵梦'],
-      cast: <String>['灵梦'],
-    );
-    expect(calls, 0);
-    expect(out, <String>['灵梦']);
   });
 
   test('GM_ROUTE 可以请求玩家帮助，回答会进入下一次请求', () async {
@@ -500,7 +411,7 @@ void main() {
     expect(seenUser, contains('CUSTOM CH_PERCEIVE TASK'));
   });
 
-  test('GM_OPEN_PLACE/GM_ENV_UPDATE/GM_ELIGIBILITY/GM_MERGE_PLACE/GM_REVIEW_NARRATION 都能解析', () async {    final LlmAgentRunner runner = _runner((LlmRequest req) async {
+  test('GM_OPEN_PLACE/GM_ENV_UPDATE/GM_MERGE_PLACE/GM_REVIEW_NARRATION 都能解析', () async {    final LlmAgentRunner runner = _runner((LlmRequest req) async {
       final String system = req.system ?? '';
       if (system.contains('GM_OPEN_PLACE')) {
         return const LlmReply(text: '{"places":[],"why":"单序列"}');
@@ -510,9 +421,6 @@ void main() {
           text:
               '{"events":[{"content":"雨小了。","target":null,"delivery":{"channel":"other","form":"narration","audience":"scene"}}]}',
         );
-      }
-      if (system.contains('只声明当前 cast')) {
-        return const LlmReply(text: '{"cast":["信标"]}');
       }
       if (system.contains('GM_MERGE_PLACE')) {
         return const LlmReply(text: '{"merge":false,"why":"不需要"}');
@@ -539,10 +447,6 @@ void main() {
     final List<WorldEvent> env =
         await runner.environmentEvents(scene: _pScene(), events: events);
     expect(env.single.content, '雨小了。');
-    expect(await runner.decideCast(
-      scene: _pScene(),
-      knownCast: <String>['信标', '艾琳'],
-    ), <String>['信标']);
     expect((await runner.decideMerge(scene: _pScene(), events: events)).merge,
         isFalse);
     expect(await runner.checkRender(

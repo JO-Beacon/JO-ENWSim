@@ -15,6 +15,7 @@ import '../../model/provider.dart';
 import '../character_memory.dart';
 import '../engine_state.dart';
 import '../causal_context.dart';
+import '../intent_beat.dart';
 import '../memory_agent.dart';
 import '../memory_recall.dart';
 import '../perception.dart';
@@ -103,86 +104,56 @@ const String _perceiveSystem = '''
 只输出 JSON。
 ''';
 
-const String _eligibilitySystem = '''
-你在推动一个涌现叙事场景。根据场景、cast、状态，选出本回合有资格行动的角色（eligible）。
-
+const String _intentSystem = '''
+你在一个涌现叙事世界里扮演指定角色。
+【你刚感知到的】只包含你此刻能感知到的新事件；【你记得的】是此刻想得起的记忆。
+【这一步】直接写出你想做什么：行动意图，不是客观结果，不写别人会怎么反应。
+输出 JSON：
+{"intent_id":"...","actor":"char:角色名","text":"你自己的话，可以带动机","target":"对谁（可以用你自己的称呼）","desired":"想达成什么","means":"用什么手段","conditions":["需要什么条件"],"success":"什么算成","failure":"什么算没成","search":null}
 规则：
-- 只能从 cast 里选。
-- 只能排除基础 eligible 里的人，不能添加。
-- 排除要写理由。
-输出 JSON：{"eligible":["..."],"excluded":[{"name":"...","reason":"..."}]}
-只输出 JSON。
+1. 只写自己；不替别人决定。
+2. 不知道的名字用你自己的称呼。
+3. 意图是请求，不是结果；不要写“我成功了”。
+4. 没有要做的事就写一条“继续当前的事/观望”的意图，不要留空。
+5. 只输出 JSON。
 ''';
 
-const String _selectActorSystem = '''
-你在推动一个涌现叙事场景。下面是 eligible 和每个角色此刻的感知。选唯一一个该行动的角色。
-
-规则：只能从 eligible 里选；输出 chosen 和 why。
-输出 JSON：{"chosen":"...","why":"..."}
-只输出 JSON。
+const String _fileClaimSystem = '''
+你是立案官。你把一个角色的私人意图转成一条公开主张。
+你全知于世界，但无知于人心：你可以用客观场面理解指称，但不能把角色不知道的名字、事实、秘密或理由写进主张。
+规则：
+1. 只留“身体要做什么”，去掉动机、目的、回忆、盘算。
+2. 永远是“试图”，不是结果；不要写“成功了/没成功”。
+3. 指称按角色的信念归一：它说“那个人”，你若能从它能感知的场面确定是谁，就填 target 的实体 id；文本仍用它自己的说法。不能确定就留空 target，不要猜。
+4. kind 只能是 speech 或 action；delivery 必须写 channel、form、audience。
+5. 只输出 JSON：{"intent_id":"...","actor":"char:...","kind":"speech|action","text":"...","target":"char:...|item:...|place:...|","delivery":{"channel":"voice|visual|mental|digital|other","form":"...","audience":"target|nearby|scene|link|hidden"},"means":"...","conditions":[],"success":"...","failure":"..."}
 ''';
 
-const String _actSystem = '''
-你在一个涌现叙事世界里扮演指定角色。你只写自己这一步的行为，不写正文，不写别人的反应，不替别人说话。
-
-【这一步】写出自己想做什么（intent）、说了什么或做了什么（segments）、语气和神态（manner）。
-只输出 JSON：
-{"intent":"...","search":null,"segments":[{"kind":"speech","text":"...","target":null,"delivery":{"channel":"voice","form":"spoken","audience":"scene"},"manner":null,"action_kind":null,"requires":["speak"],"perceivable_by":[]}],"state_delta":null,"resolution":"direct","duration":"brief","preconditions":[],"manner":"...","time_label":"入夜之后"}
-
+const String _resolveBeatSystem = '''
+你是裁决上帝。你拿到这一拍一个角色的公开主张，以及客观的物理事实。
+你只判断这条意图的实际结果：success / failure / partial / unresolved。
 规则：
-1. 只写自己。不写别人的反应、内心或台词。
-2. 不替玩家决定；不写“你”的心理。
-3. 不知道的名字不要用；用你自己的称呼。
-4. 台词是自己说的话；动作写成 kind=action 的段。
-5. 每个 segment 都必须有 delivery；动作 use visual/gesture/scene。delivery 里没有 loudness 这种音量档位；audience 只回答“谁能感知”。
-6. 动作段只写可观察动作，不写心理、不写别人的反应；text 控制在一句话内。
-7. 对抗或结果不确定的动作填 action_kind（attack/dodge/grapple/chase/flee/steal/lockpick/disarm/spell_contest/interact）。移动、拿取也可能受阻；不能用 null 宣布成功。已知前提全满足时才写 resolution=direct，否则写 resolution=adjudicate。
-8. 每个 segment 都必须写 requires，不能省略、不能写 null：说话写 ["speak"]；用到某只手写 ["use_left_arm"] / ["use_right_arm"]；跑/站/施法写 ["run"] / ["stand"] / ["cast"]；没有特殊能力就写 []。
-9. state_delta 是提案，只能直接改变自己的确定行为；他人的移动、伤势、配合与未知物品必须裁定。对抗的结果由 GM_RESOLVE_ACTION 决定。每份记录最多一个 action 段；可带不需要别人响应的短台词。等待回应、跨地点后继续行动、多目标对抗要留到下一步。
-10. 伤势只记事实：部位、什么伤、怎么来的、处理过没有、还在不在流血。不要写“轻伤/重伤”这种程度分数；功能限制单独写 constraints，可以是 can / cannot / uncertain。
-11. state_delta 里用规范名/地点名/物品 id；没有变化就填 null。
-12. requires 必须和【你现在的状态】一致；做不到就不要写这个行动。动作与状态冲突时，换一个当前状态能做到的行动，或写“她没有动/没有回答”；不要输出 status 字段。
-13. 每个 segment 必须带 perceivable_by；它是能感知这一段的角色名单，没有额外限制就写 []，由 delivery.audience 决定。
-14. 如果上一轮出现【CH_ACT 校验失败】，按错误修正后重写；不要省略字段或补空值。
-15. 只输出 JSON，不要代码块。持续行动可提出 processes；未完成的旅行不能同时提出到达。preconditions 写已知的 subject/predicate/object 前提；未知前提交给裁定。duration 用 instant/brief/extended，不等同于秒数。无状态变化的直接动作仅限 gesture/wait/observe；移动 move、拿取 take、给予 give、放下 drop 仍需核对状态，未知或受阻则裁定。state_delta 字段可用 move/injure/constraints/items/facts/discoveries/processes。
-16. 如果你想查外部资料，把一句具体的查询写进 search；没有就写 null。search 只是意图，不会在这一步返回结果，结果要等环境更新去查。
-17. time_label 是这一步发生的时间标记，用你此刻感觉得到的模糊时间（如“入夜之后”“雨还没停的时候”），不写日期、时刻或时间戳，不超过 24 字；没有新的时间线索就写 null。
-18. 只有当前行动与已知时间边界明确对应时才写 time_boundary_id，引用已知事实 ID，不自行排定行动先后。
-19. action_kind 为 wait 时，可以用 wait_for 指明明确条件。kind 为 fact_change 或 time_boundary，id 必须是你可知的事实 ID。没有这样的明确条件时，只写你在等什么。
+1. 依据位置、伤势、装备、约束、进行中的过程、距离、防备；不依据任何人的记忆或动机。
+2. 不发明物品、能力或人；主张里没有的，不替它补。
+3. 同一件东西、同一个事实、同一具身体上的冲突要一起裁：谁先、谁挡住谁、能不能都成。
+4. 这条主张必须有结算，不能漏；失败也要给结果。
+5. self_text 是本人感知到的那份，可以有第一人称细节；observers 是旁观者各自看得见的那份，没人看见就空。
+6. 只输出 JSON：{"settlements":[{"intent_id":"...","actor":"char:...","result":"success|failure|partial|unresolved","result_text":"客观结果","self_text":"本人看到什么","observers":{"char:...":"..."},"state_delta":{"deltas":[],"facts":[],"discoveries":[],"processes":[]}}]}
+状态变化只写实际发生的：移动、伤势、约束、物品、事实、发现、持续过程；没有就写空对象。格式与行动记录的 state_delta 一致。
 ''';
 
-const String _resolveSystem = '''
-你在一个涌现叙事世界里做“裁定”。你只判断一个行动的结果，不写正文，不替角色决定下一步。
+const String _observeOutcomeSystem = '''
+你把一条已经裁定的客观结果，翻成指定角色此刻能感知到的那份。
+只写这个角色看得见、听得见、摸得着、感觉得到的东西；不写别人的内心，不写它不知道的事实。
+本人可以有第一人称的感官细节；旁观者只写他们看得见的。
+只输出 JSON：{"text":"..."}。
+''';
 
-请输出 JSON：
-{"outcome":"success|failure|partial|unresolved","result":"实际发生的客观结果","observations":{"char:角色名":"这个角色实际能感知的结果"},"deltas":[],"facts":[],"discoveries":[],"processes":[],"time_label":"入夜之后","reason":"裁定依据"}
-
-deltas 只能用这些 kind：steal / take / give / move / injure / constraint / drop / none。
-facts 格式：{"subject":"实体 id","predicate":"属性","object":"当前值","evidence":"成立依据","visibility":"public|hidden|self","observers":[],"op":"set|add|remove"}。
-单值属性用 set；多值关系用 add/remove，connected_to 默认 add，增加一条出口不能抹掉其他出口。
-已成立的未来安排可写成 time_boundary 事实：object 写边界名称，evidence 写安排的来源。不要把猜想写成安排。有明确先后证据时可写 time_before 关系。
-discoveries 格式：{"id":"item:...","kind":"item|container|place|other","name":"名称","location":"已有位置","evidence":"确认存在的依据"}；行动者提议拿取不等于物品存在。
-processes 格式：{"id":"process:...","place":"地点","owner":"角色名或空","kind":"travel|action|environment","status":"ongoing|completed|cancelled","description":"当前进度","completion_condition":"完成依据","destination":"旅行目的地","visibility":"public|hidden"}。
-过程必须等到某个已记录的时间边界才能结束时，用 completion_boundary 引用该事实的 ID。不能用较大的 world_step 当作已经到达该边界。
-若有明确依据表明在某个已记录的时间边界之前无需再评估此过程，用 next_check_boundary 引用边界事实的 ID。无需再等时可以传空字符串解除等待。
-若只需等一条已成立事实的取值改变或失效，用 next_check_fact 引用该事实 ID。一次只填一种等待条件。
-例子：
-{"kind":"steal","item_id":"item:first_aid_kit_01","from":"char:信标","to":"char:魔理沙"}
-{"kind":"move","id":"char:灵梦","to":"place:仓房"}
-{"kind":"injure","who":"char:魔理沙","part":"left_shoulder","injury_kind":"cut","cause":"刀伤","treatment":"已包扎","note":"还在渗血"}
-{"kind":"constraint","who":"char:魔理沙","capability":"use_left_arm","state":"cannot","reason":"左肩刀伤"}
-规则：
-- 只判断这个行动的结果；不写台词、心理、正文。
-- time_label 是这次结果发生的时间标记，用文本（如“入夜之后”“同一瞬间”），不写日期、时刻或时间戳，不超过 24 字；行动记录已经写了同一时间就照抄。
-- 先看行动者和目标的当前状态：伤势事实、功能限制、装备、距离、防备都会影响结果。
-- 伤势只记事实，不写“轻伤/重伤”这种程度分数；功能限制单独用 constraint，state 可以是 can / cannot / uncertain。
-- 不发明物品；item_id 必须来自行动记录或已有账本。
-- 结果不确定就 unresolved。
-- observations 必须逐人过滤：看到尝试不等于知道成功，暗伤和秘密不公开；无人可见的结果用空对象。result 给上帝和正文，reason 不是角色观察。
-- 跨地点移动时，依据 world.locations 逐一检查目的地居民，并在 observations 中给出他们各自的到达见闻；隐蔽到达无人看见时，也要为该居民明确写空文本。目的地居民不能看到出发地的动作和台词。
-- 读取当前世界规则、前提、物品归属与持续环境事实；已有防御姿态可影响结果，投降、牺牲、主动反击等意志选择不得替另一角色决定。
-- 每步最多结算一个动作，不替后续行动预判结果。持续旅行先记录 ongoing，满足完成条件后才 completed 并移动。
-只输出 JSON。
+const String _rememberOutcomeSystem = '''
+你在整理一个角色自己的第一人称记忆。这一拍它想做 X，结果是 Y。
+写一条记忆，把意图和结果都写进去；成功失败都写。只能写这个角色自己的记忆。
+输出 JSON：{"operations":[{"op":"encode","text":"...","kind":"episodic","source_events":["事件id"],"attention":"...","salience":"..."}]}
+source_events 只能用给定的事件 id。
 ''';
 
 const String _rSystem = '''
@@ -222,12 +193,6 @@ time_label 是这条事件发生的时间标记，用文本（如“入夜之后
 facts 可指定 op=set/add/remove：单值属性用 set，多值关系用 add/remove，connected_to 默认 add；增加出口不能覆盖原有出口。
 已有依据的未来安排可写 time_boundary 事实，object 写边界名称，evidence 写已有依据。描述中提到将来的事并不等于已经发生。
 没有环境变化就输出 {"events":[]}。若有可核实的等待条件，可同时提交 wait_for 对象：kind 为 fact_change（等一条现存事实取值改变）或 time_boundary（等未来时间边界），id 填对应事实 ID。仅有语义理由时不要编造 ID。
-''';
-
-const String _castSystem = '''
-你是叙事引擎的 GM_CAST。只声明当前 cast（在场角色），不判断谁有资格行动。
-cast 只能从给定名字里选；不确定就保留原 cast。
-只输出 JSON：{"cast":["角色名"]}。
 ''';
 
 const String _mergePlaceSystem = '''
@@ -329,7 +294,7 @@ player 里还有当前状态 state 和功能限制 constraints；另有 inventor
 只输出 JSON，不要任何别的文字，不要用代码块包起来。
 ''';
 
-class LlmAgentRunner implements TurnAgents, ArchiveRecallAgents {
+class LlmAgentRunner implements TurnAgents, ArchiveRecallAgents, IntentBeatAgents {
   LlmAgentRunner({
     required this.provider,
     required this.apiKey,
@@ -942,67 +907,6 @@ class LlmAgentRunner implements TurnAgents, ArchiveRecallAgents {
   }
 
   @override
-  Future<List<String>> selectEligible({
-    required List<String> baseEligible,
-    required List<String> cast,
-    String playerNotes = '',
-    List<String> errors = const <String>[],
-    List<String>? previous,
-  }) async {
-    final String feedback = errors.isEmpty
-        ? ''
-        : '\n\n【上一次 GM_ELIGIBILITY 输出】\n${jsonEncode(previous ?? const <String>[])}\n'
-            '【GM_ELIGIBILITY 校验失败】\n${errors.join('\n')}\n'
-            '必须只从基础 eligible 里排除，不能添加或改写名字。';
-    final String body = '【当前事实与状态】${causalContext?.godText(currentPlace) ?? ''}\n'
-        '【场景】当前场景。\n'
-        '【cast】${cast.join('、')}\n'
-        '【角色状态】${jsonEncode(<String, String>{for (final String n in cast) n: profiles[n]?.state ?? ''})}\n'
-        '【基础 eligible】${baseEligible.join('、')}${_notesText(playerNotes)}$feedback';
-    final String user =
-        _taskUser('GM_ELIGIBILITY', '请输出 eligible 和 excluded。', body);
-    return _askNames(step: StepId.gmEligibility, field: 'eligible',
-      system: _eligibilitySystem, user: user, maxTokens: 1024);
-  }
-
-  @override
-  Future<String?> selectActor({
-    required List<String> eligible,
-    required Map<String, Map<String, Object?>> percepts,
-    String playerNotes = '',
-    List<String> errors = const <String>[],
-    String? previous,
-  }) async {
-    final String feedback = errors.isEmpty
-        ? ''
-        : '\n\n【上一次 GM_SELECT_ACTOR 输出】\n${previous ?? ''}\n'
-            '【GM_SELECT_ACTOR 校验失败】\n${errors.join('\n')}\n'
-            '必须从 eligible 里原样选一个角色名。';
-    final String lines = percepts.entries
-        .map((MapEntry<String, Map<String, Object?>> e) =>
-            '${e.key}：${jsonEncode(e.value)}')
-        .join('\n');
-    final String body = '优先依据当下目标、待续事务、危险和完成条件判断，不能把没有新刺激当作没有行动动力。\n'
-        '【权威状态与持续过程】${causalContext?.godText(currentPlace) ?? ''}\n'
-        '【eligible】${eligible.join('、')}\n'
-        '【角色倾向】${jsonEncode(<String, String>{for (final String n in eligible) n: profiles[n]?.persona ?? ''})}\n'
-        '【CH_PERCEIVE 感知与持续驱动】\n$lines${_notesText(playerNotes)}$feedback';
-    final String user =
-        _taskUser('GM_SELECT_ACTOR', '请选唯一一个该行动的角色。', body);
-    final Map<String, Object?> out = _guardAsk(
-      'GM_SELECT_ACTOR',
-      await _askJson(
-        step: 'GM_SELECT_ACTOR',
-        system: _selectActorSystem,
-        user: user,
-        maxTokens: 1024,
-      ),
-    );
-    final String chosen = '${out['chosen'] ?? ''}'.trim();
-    return chosen.isEmpty ? null : chosen;
-  }
-
-  @override
   Future<List<MemoryOperation>?> manageMemory({
     required String characterId,
     required Map<String, Object?> percepts,
@@ -1201,89 +1105,217 @@ reinforce / reinterpret / archive 用 memory_id 指向现有条目，compress �
     );
   }
 
+  // ---- 意图回合：投递 → 意图 → 立案 → 统一裁决 → 结果见闻 → 记忆 ----
+
   @override
-  Future<Map<String, Object?>> act({
-    required String name,
-    required String context,
-    required String perceive,
+  Future<CharacterIntent> intend({
+    required String actor,
+    required String delivered,
+    required String recalled,
     required List<String> present,
-  }) {
-    final CharacterProfile profile = profiles[name] ??
-        CharacterProfile(persona: name, state: '');
-    final String people = present.map((String n) => n == name ? n :
-        (roleAliases[name]?['char:$n'] ?? '某人')).join('、');
+  }) async {
+    final CharacterProfile profile = profiles[actor] ??
+        CharacterProfile(persona: actor, state: '');
+    final String people = present
+        .map((String n) =>
+            n == actor ? n : (roleAliases[actor]?['char:$n'] ?? '某人'))
+        .join('、');
     final String body = '【你现在的状态】${profile.state}\n\n'
         '【现在在场】$people\n\n'
-        '【你记得的】\n---\n$context\n---\n\n'
-        '【你刚才的感知（CH_PERCEIVE）】\n$perceive';
-    return _askJson(
-      step: 'CH_ACT',
-      focus: name,
-      cacheScope: name,
-      system: '$_actSystem\n【扮演角色】$name\n【你】${profile.persona}',
-      user: _taskUser('CH_ACT', '请写出你这一步的行动记录，只输出 JSON。', body),
+        '【你记得的】\n---\n$recalled\n---\n\n'
+        '【你刚感知到的】\n$delivered';
+    final Map<String, Object?> out = await _askJson(
+      step: StepId.chIntent,
+      focus: actor,
+      cacheScope: actor,
+      system: '$_intentSystem\n【扮演角色】$actor\n【你】${profile.persona}',
+      user: _taskUser(StepId.chIntent, '请写出你这一步的行动意图，只输出 JSON。', body),
       maxTokens: 2048,
+    );
+    final String rawId = '${out['intent_id'] ?? ''}'.trim();
+    return CharacterIntent(
+      id: rawId.isEmpty
+          ? 'intent:$actor:${DateTime.now().microsecondsSinceEpoch}'
+          : rawId,
+      actor: 'char:$actor',
+      text: '${out['text'] ?? ''}'.trim(),
+      target: '${out['target'] ?? ''}'.trim(),
+      desired: '${out['desired'] ?? ''}'.trim(),
+      means: '${out['means'] ?? ''}'.trim(),
+      conditions: _strings(out['conditions']),
+      success: '${out['success'] ?? ''}'.trim(),
+      failure: '${out['failure'] ?? ''}'.trim(),
+      search: '${out['search'] ?? ''}'.trim(),
     );
   }
 
   @override
-  Future<Map<String, Object?>> adjudicate({
-    required Map<String, Object?> action,
-    required String actor,
-    required String? target,
-    required String place,
-    required List<String> present,
-    List<String> errors = const <String>[],
-    Map<String, Object?>? previous,
-    String playerNotes = '',
+  Future<PublicClaim> fileClaim({
+    required CharacterIntent intent,
+    required String publicScene,
+    required Map<String, String> aliases,
+    required List<String> knownEntities,
   }) async {
-    final CharacterProfile actorProfile = profiles[actor] ??
-        CharacterProfile(persona: actor, state: '');
-    final CharacterProfile? targetProfile = target == null
-        ? null
-        : (profiles[target] ?? CharacterProfile(persona: target, state: ''));
-    final CausalContext? causal = causalContext;
-    final Set<String> referenced = causal?.actionEntities(action, target: target) ?? <String>{};
-    final Map<String, Object?> context = <String, Object?>{
-      if (causal != null) 'world': CausalContext.promptOrder(causal.forGod(place,
-        involved: <String>{'char:$actor', ...referenced}, allEntities: true)),
-      'place': place,
-      'present': present,
-      'actor': <String, Object?>{
-        'name': actor,
-        'persona': actorProfile.persona,
-        'state': actorProfile.state,
-      },
-      'target': target == null
-          ? null
-          : <String, Object?>{
-              'name': target,
-              'persona': targetProfile!.persona,
-              'state': targetProfile.state,
-            },
-      'action': action,
-      if (causal != null) 'referenced_entities': referenced.toList(),
-      'player_notes': playerNotes,
-    };
-    final String feedbackBlock = errors.isEmpty
-        ? ''
-        : '\n\n【上一次裁定输出】\n'
-            '${jsonEncode(previous ?? const <String, Object?>{})}\n'
-            '【裁定校验失败】\n${errors.join('\n')}\n请修正后重写。';
-    return _guardAsk(
-      'GM_RESOLVE_ACTION',
-      await _askJson(
-        step: 'GM_RESOLVE_ACTION',
-        system: _resolveSystem,
-        user: _taskUser(
-          'GM_RESOLVE_ACTION',
-          '请裁定这个动作的结果，只输出 JSON。',
-          '【裁定上下文】\n${jsonEncode(context)}$feedbackBlock',
-        ),
-        maxTokens: 4096,
-      ),
+    final String body = '【公开场面】\n$publicScene\n\n'
+        '【这个角色的称呼表】\n${jsonEncode(aliases)}\n\n'
+        '【可归一的实体】${knownEntities.join('、')}\n\n'
+        '【私人意图】\n${jsonEncode(intent.toJson())}';
+    final Map<String, Object?> out = await _askJson(
+      step: StepId.gmFileClaim,
+      cacheScope: intent.actor.replaceFirst('char:', ''),
+      system: _fileClaimSystem,
+      user: _taskUser(StepId.gmFileClaim, '请把这条私人意图转成公开主张，只输出 JSON。', body),
+      maxTokens: 1024,
+    );
+    return PublicClaim(
+      intentId: '${out['intent_id'] ?? ''}'.trim(),
+      actor: '${out['actor'] ?? ''}'.trim(),
+      kind: '${out['kind'] ?? ''}'.trim(),
+      text: '${out['text'] ?? ''}'.trim(),
+      targetId: '${out['target'] ?? ''}'.trim(),
+      delivery: _deliveryOf(out['delivery']),
+      means: '${out['means'] ?? ''}'.trim(),
+      conditions: _strings(out['conditions']),
+      success: '${out['success'] ?? ''}'.trim(),
+      failure: '${out['failure'] ?? ''}'.trim(),
+      perceivableBy: _strings(out['perceivable_by']),
     );
   }
+
+  @override
+  Future<List<IntentSettlement>> adjudicateBeat({
+    required List<PublicClaim> claims,
+    required String objectiveWorld,
+    required List<String> present,
+  }) async {
+    final String body = '【客观世界】\n$objectiveWorld\n\n'
+        '【在场】${present.join('、')}\n\n'
+        '【本轮全部公开主张】\n${jsonEncode(<Object?>[for (final PublicClaim c in claims) c.toJson()])}';
+    final Map<String, Object?> out = await _askJson(
+      step: StepId.gmResolveBeat,
+      system: _resolveBeatSystem,
+      user: _taskUser(StepId.gmResolveBeat, '请结算这一轮的所有意图，只输出 JSON。', body),
+      maxTokens: 8192,
+    );
+    final Object? raw = out['settlements'];
+    if (raw is! List) {
+      throw const FormatException('GM_RESOLVE_BEAT 缺少 settlements');
+    }
+    return <IntentSettlement>[
+      for (final Object? item in raw)
+        if (item is Map)
+          IntentSettlement(
+            intentId: '${item['intent_id'] ?? ''}'.trim(),
+            actor: '${item['actor'] ?? ''}'.trim(),
+            result: '${item['result'] ?? ''}'.trim(),
+            resultText: '${item['result_text'] ?? ''}'.trim(),
+            selfText: '${item['self_text'] ?? ''}'.trim(),
+            observers: <String, String>{
+              if (item['observers'] is Map)
+                for (final MapEntry<Object?, Object?> e
+                    in (item['observers'] as Map).entries)
+                  '${e.key}': '${e.value}',
+            },
+            stateDelta: item['state_delta'] is Map
+                ? Map<String, Object?>.from(item['state_delta'] as Map)
+                : const <String, Object?>{},
+          ),
+    ];
+  }
+
+  @override
+  Future<Map<String, String>> observeOutcome({
+    required IntentSettlement settlement,
+    required String objectiveWorld,
+    required String observerId,
+  }) async {
+    final String body = '【观察者】$observerId\n\n'
+        '【客观世界】\n$objectiveWorld\n\n'
+        '【客观结算】\n${jsonEncode(settlement.toJson())}';
+    final Map<String, Object?> out = await _askJson(
+      step: StepId.gmOutcomeView,
+      cacheScope: observerId.replaceFirst('char:', ''),
+      system: _observeOutcomeSystem,
+      user: _taskUser(StepId.gmOutcomeView, '请写出这个观察者能感知到的那份，只输出 JSON。', body),
+      maxTokens: 1024,
+    );
+    final String text = '${out['text'] ?? ''}'.trim();
+    return <String, String>{if (text.isNotEmpty) observerId: text};
+  }
+
+  @override
+  Future<List<MemoryOperation>?> rememberOutcome({
+    required String actor,
+    required CharacterIntent intent,
+    required IntentSettlement settlement,
+    required List<CharacterMemory> memory,
+    required Set<String> allowedEventIds,
+  }) async {
+    final String body = '【角色】$actor\n'
+        '【意图】${jsonEncode(intent.toJson())}\n'
+        '【结算】${jsonEncode(settlement.toJson())}\n'
+        '【现有记忆】\n${memory.map((CharacterMemory m) => '${m.id}｜${m.text}').join('\n')}\n'
+        '【允许引用的事件】${allowedEventIds.join('、')}';
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      final Map<String, Object?> out = await _askJson(
+        step: StepId.chMemoryWrite,
+        cacheScope: actor.replaceFirst('char:', ''),
+        cacheBatch: allowedEventIds.join(','),
+        system: _rememberOutcomeSystem,
+        user: _taskUser(StepId.chMemoryWrite, '请写下这一拍的记忆，只输出 JSON。', body),
+        maxTokens: 2048,
+      );
+      final Object? raw = out['operations'];
+      if (raw is! List) continue;
+      final List<MemoryOperation> ops = <MemoryOperation>[];
+      for (final Object? item in raw) {
+        if (item is! Map) continue;
+        final MemoryOperation? op =
+            MemoryOperation.fromJson(Map<String, Object?>.from(item));
+        if (op != null) ops.add(op);
+      }
+      try {
+        applyMemoryOperations(
+          characterId: actor,
+          current: memory,
+          operations: ops,
+          allowedEventIds: allowedEventIds,
+        );
+        return ops;
+      } on MemoryAgentException {
+        continue;
+      }
+    }
+    return null;
+  }
+
+  /// 目击者记忆暂由程序写一条；模型侧留接口，等记忆 Agent 的目击写法定下来再接。
+  @override
+  Future<List<MemoryOperation>?> rememberWitness({
+    required String actor,
+    required WorldEvent event,
+    required String seenText,
+    required List<CharacterMemory> memory,
+    required Set<String> allowedEventIds,
+  }) async =>
+      null;
+
+  /// 立案输出的 delivery 兜底：缺字段时按“看得见的动作”处理。
+  Delivery _deliveryOf(Object? raw) {
+    final Map<Object?, Object?> m =
+        raw is Map ? raw : const <Object?, Object?>{};
+    return Delivery(
+      channel: deliveryChannelOf('${m['channel'] ?? 'visual'}'),
+      form: '${m['form'] ?? 'gesture'}',
+      audience: audienceOf('${m['audience'] ?? 'scene'}'),
+    );
+  }
+
+  List<String> _strings(Object? raw) => raw is List
+      ? <String>[for (final Object? x in raw) '$x'.trim()]
+          .where((String s) => s.isNotEmpty)
+          .toList()
+      : const <String>[];
 
   @override
   Future<Map<String, Object?>> render({
@@ -1454,29 +1486,6 @@ reinforce / reinterpret / archive 用 memory_id 指向现有条目，compress �
   }
 
   /// GM_ENV_UPDATE：环境事件（天气/火势/人群等），没有就返回空数组。
-  Future<Map<String, Object?>> adjudicateContest(
-    String subjectId, List<Map<String, Object?>> attempts, List<String> errors,
-  ) => _askJson(
-    step: 'GM_RESOLVE_ACTION',
-    cacheScope: 'contest',
-    system: '共同裁定对同一物品或已知属性有冲突或依赖的尝试。遵守 must_follow 中已成立的先后关系。'
-        '列出有依据且结果相容的成功者。证据不足时返回 unresolved。不能发明前提、新行动或状态变化。'
-        '只输出 JSON：{"successful":["尝试者姓名"],"outcome":"resolved|unresolved","reason":"依据"}。',
-    user: _taskUser(
-      'GM_RESOLVE_ACTION',
-      '共同裁定已收集的竞争尝试。',
-      jsonEncode(<String, Object?>{
-        'world': causalContext == null ? null : CausalContext.promptOrder(
-          causalContext!.forGod('', involved: <String>[subjectId], allEntities: true),
-        ),
-        'subject_id': subjectId,
-        'attempts': attempts,
-        if (errors.isNotEmpty) 'validation_errors': errors,
-      }),
-    ),
-    maxTokens: 1000,
-  );
-
   Future<Map<String, Object?>> proposeTimeAdvance({
     required List<FactRecord> boundaries,
     required TurnState state,
@@ -1645,50 +1654,6 @@ reinforce / reinterpret / archive 用 memory_id 指向现有条目，compress �
     }
     throw LlmRetryExhaustedException(step: StepId.gmObserveScene,
       reason: '现场见闻连续 3 次未满足逐人隔离的输出协议');
-  }
-
-  /// GM_ELIGIBILITY：AI 只声明 cast；资格仍由 TurnLoop 程序算。
-  Future<List<String>> decideCast({
-    required NarrativeScene scene,
-    required List<String> knownCast,
-    List<String>? errors,
-    List<String>? previous,
-  }) async {
-    final List<String> errs = errors ?? const <String>[];
-    final String feedback = errs.isEmpty
-        ? ''
-        : '\n\n【上一次 GM_CAST 输出】\n${jsonEncode(previous ?? const <String>[])}\n'
-            '【GM_CAST 校验失败】\n${errs.join('\n')}\n'
-            'cast 只能从当前可见角色里选，不能造名字。';
-    // 顺序：稳定的在前（世界事实、场景），会变的在后（玩家补充、校验反馈）。
-    final String body = '${_worldFacts(scene.place)}\n'
-        '【场景】${scene.place}\n'
-        '【当前可见角色】${knownCast.join('、')}'
-        '${_playerNotesOf(scene)}$feedback';
-    final String user = _taskUser(
-      StepId.gmCast,
-      '只输出 JSON：{"cast":["角色名"]}。cast 必须来自【当前可见角色】；'
-      '不确定就保留原 cast。',
-      body,
-    );
-    return _askNames(step: StepId.gmCast, field: 'cast',
-      system: _castSystem, user: user, maxTokens: 256);
-  }
-
-  Future<List<String>> _askNames({required String step, required String field,
-    required String system, required String user, required int maxTokens}) async {
-    String feedback = '';
-    for (int attempt = 1; attempt <= 3; attempt++) {
-      final Map<String, Object?> out = await _askJson(step: step, system: system,
-        user: '$user$feedback', maxTokens: maxTokens);
-      final Object? raw = out[field];
-      if (raw is List && raw.every((Object? item) => item is String && item.trim().isNotEmpty)) {
-        return <String>[for (final Object? item in raw) (item! as String).trim()];
-      }
-      feedback = '\n【上一次输出不合格】\n${jsonEncode(out)}\n'
-          '$field 必须是角色名数组；无人时明确写空数组，不能缺字段或返回其它类型。';
-    }
-    throw LlmRetryExhaustedException(step: step, reason: '$step 连续 3 次缺少有效的 $field 数组。');
   }
 
   /// GM_MERGE_PLACE：当前线已经没人时，从其他 active 序列里选一个合并目标。

@@ -21,6 +21,7 @@ import 'c_writer.dart';
 import 'causal_context.dart';
 import 'character_memory.dart';
 import 'engine_state.dart';
+import 'intent_beat.dart';
 import 'ledger.dart';
 import 'memory_agent.dart';
 import 'memory_recall.dart';
@@ -30,12 +31,7 @@ import 'render_view.dart';
 import 'sequence.dart';
 import 'state_delta.dart';
 import 'step_id.dart';
-import 'time_label.dart';
 import 'turn_session.dart';
-
-typedef _ActionClaim = ({String subject, String? property, String value});
-typedef _ContestAttempt = ({NarrativeScene scene, Map<String, Object?> action, StateDelta delta,
-    Set<_ActionClaim> claims});
 
 /// 一次 AI 向玩家（人）求助的请求。不是角色台词，也不进事件。
 class PlayerQuestion {
@@ -123,12 +119,6 @@ typedef PlayerActionHandler = Future<Map<String, Object?>?> Function({
 });
 typedef StageCallback = void Function(String stage);
 
-typedef ContestDecider = Future<Map<String, Object?>> Function(
-  String subjectId,
-  List<Map<String, Object?>> attempts,
-  List<String> errors,
-);
-
 typedef TurnPresentation = ({
   Map<String, Object?> render,
   String publicText,
@@ -196,22 +186,6 @@ abstract class TurnAgents {
     List<String> imageAssetIds = const <String>[],
   }) => perceive(name: name, context: context, events: events);
 
-  Future<List<String>> selectEligible({
-    required List<String> baseEligible,
-    required List<String> cast,
-    String playerNotes = '',
-    List<String> errors = const <String>[],
-    List<String>? previous,
-  });
-
-  Future<String?> selectActor({
-    required List<String> eligible,
-    required Map<String, Map<String, Object?>> percepts,
-    String playerNotes = '',
-    List<String> errors = const <String>[],
-    String? previous,
-  });
-
   /// CH_MEMORY_WRITE 写侧：没有实现时返回 null，旧测试/旧路径回退到程序写一条感知。
   Future<List<MemoryOperation>?> manageMemory({
     required String characterId,
@@ -230,13 +204,6 @@ abstract class TurnAgents {
   }) async =>
       null;
 
-  Future<Map<String, Object?>> act({
-    required String name,
-    required String context,
-    required String perceive,
-    required List<String> present,
-  });
-
   /// 把玩家对某一步的回答交给实现方；只有上帝层会用到。
   void setPlayerHelp(Map<String, String> help);
 
@@ -249,17 +216,6 @@ abstract class TurnAgents {
   void recordIntervention(String key, PlayerQuestion question, String answer) {
     recordPlayerAnswer(key, answer);
   }
-
-  Future<Map<String, Object?>> adjudicate({
-    required Map<String, Object?> action,
-    required String actor,
-    required String? target,
-    required String place,
-    required List<String> present,
-    List<String> errors = const <String>[],
-    Map<String, Object?>? previous,
-    String playerNotes = '',
-  });
 
   Future<Map<String, Object?>> render({
     required List<WorldEvent> events,
@@ -399,12 +355,7 @@ typedef EnvironmentSource = Future<List<WorldEvent>> Function({
   required List<WorldEvent> events,
   String? feedback,
 });
-typedef CastDecider = Future<List<String>> Function({
-  required NarrativeScene scene,
-  required List<String> knownCast,
-  List<String>? errors,
-  List<String>? previous,
-});
+
 typedef MergePlaceDecider = Future<MergePlaceResult> Function({
   required NarrativeScene scene,
   required List<WorldEvent> events,
@@ -467,17 +418,14 @@ class TurnTrace {
     this.mergePlace = const MergePlaceResult(merge: false, why: '本回合未到 GM_MERGE_PLACE'),
     this.openPlaceErrors = const <String>[],
     this.routeErrors = const <String>[],
-    this.castErrors = const <String>[],
-    this.castFailureStep = StepId.gmEligibility,
-    this.selectActorErrors = const <String>[],
     this.perceiveErrors = const <String>[],
     this.environmentErrors = const <String>[],
-    this.resolveErrors = const <String>[],
     this.needsReview = false,
     this.reviewWarnings = const <String>[],
     this.rejectedEvents = const <WorldEvent>[],
     this.cast = const <String>[],
     this.orderedDeltas = const <StateDelta>[],
+    this.intentBeat = false,
   });
 
   final Map<String, Map<String, Object?>> percepts;
@@ -514,23 +462,13 @@ class TurnTrace {
   /// GM_ROUTE 输出不合格的错误；非空表示这一回合没有决定路线，不推进。
   final List<String> routeErrors;
 
-  /// GM_ELIGIBILITY 输出不合格的错误；非空表示这一回合没有确定 cast/eligible，不推进。
-  final List<String> castErrors;
-  final String castFailureStep;
-
-  /// GM_SELECT_ACTOR 输出不合格的错误；非空表示这一回合没有选出 actor，不推进。
-  final List<String> selectActorErrors;
-
   /// CH_PERCEIVE 引用了候选集外的事件时的错误；非空表示这一回合不推进。
   final List<String> perceiveErrors;
 
   /// GM_ENV_UPDATE 环境事件在 SYS_RECORD 校验里不合格的错误；非空表示这一回合不落账。
   final List<String> environmentErrors;
 
-  /// GM_RESOLVE_ACTION 输出不合格时的错误；非空表示这一回合不落账。
-  final List<String> resolveErrors;
-
-  /// GM_RESOLVE_ACTION 说 unresolved 时置 true；需要人工看，不默认命中/失败。
+  /// 裁决说 unresolved 时置 true；需要人工看，不默认命中/失败。
   final bool needsReview;
 
   /// 可选 GM_REVIEW_NARRATION AI 的软警告；不替代程序硬校验。
@@ -541,6 +479,9 @@ class TurnTrace {
 
   /// GM_ELIGIBILITY 最终 cast（AI 声明后经程序过滤）。
   final List<String> cast;
+
+  /// 本回合走的是意图回合（一拍一个行动者，先意图后裁决）。
+  final bool intentBeat;
 
   /// 无交互宿主也能取得结构化求助；有 askPlayer 时由循环当场移交。
   PlayerQuestion? get playerIntervention {
@@ -553,8 +494,10 @@ class TurnTrace {
       );
     }
     final Map<String, List<String>> failures = <String, List<String>>{
-      'GM_OPEN_PLACE': openPlaceErrors, 'GM_ROUTE': routeErrors, 'CH_PERCEIVE': perceiveErrors, castFailureStep: castErrors,
-      'GM_SELECT_ACTOR': selectActorErrors, 'GM_ENV_UPDATE': environmentErrors, 'GM_RESOLVE_ACTION': resolveErrors,
+      'GM_OPEN_PLACE': openPlaceErrors,
+      'GM_ROUTE': routeErrors,
+      'CH_PERCEIVE': perceiveErrors,
+      'GM_ENV_UPDATE': environmentErrors,
       'GM_NARRATE': <String>[
         for (final RenderViolation v in renderViolations) '${v.code}：${v.message}',
         ...reviewWarnings,
@@ -565,10 +508,11 @@ class TurnTrace {
         return retryExhaustedQuestion(step: failure.key, reason: failure.value.join('\n'));
       }
     }
-    if (stop?.code == 'step_budget') {
-      return retryExhaustedQuestion(step: 'CH_ACT', reason: <String>[
-        stop!.reason, for (final ActValidationError e in actErrors) e.message,
-      ].join('\n'));
+    if (stop?.code == 'intent_beat') {
+      return retryExhaustedQuestion(
+        step: StepId.chIntent,
+        reason: stop!.reason,
+      );
     }
     return null;
   }
@@ -585,17 +529,12 @@ class TurnLoop {
     this.constraints = const <FunctionalConstraint>[],
     this.openPlaceStepBudget = 3,
     this.routeStepBudget = 3,
-    this.castStepBudget = 3,
-    this.selectActorStepBudget = 3,
     this.perceiveStepBudget = 3,
-    this.actStepBudget = 8,
-    this.resolveStepBudget = 3,
     this.environmentStepBudget = 3,
     this.rStepBudget = 3,
     this.openPlaceDecider,
     this.routeDecider,
     this.environmentSource,
-    this.castDecider,
     this.mergePlaceDecider,
     this.parallelPlaceCandidates = const <ParallelPlaceCandidate>[],
     this.otherParallelPlaces = const <ParallelPlaceInfo>[],
@@ -611,11 +550,11 @@ class TurnLoop {
     this.onStage,
     this.onCheckpoint,
     this.deferPresentation = false,
-    this.contestDecider,
     this.responseRevisions = const <String, String>{},
     this.actorsDue,
     this.recoveryContext = '',
     this.eventNamespace = '',
+    this.intentAgents,
     Map<String, String>? playerHelp,
     int startSeq = 1,
   })  : memory = memoryStore ?? MemoryStore(),
@@ -627,7 +566,9 @@ class TurnLoop {
   final NarrativeScene scene;
   final bool deferPresentation;
   final String eventNamespace;
-  final ContestDecider? contestDecider;
+
+  /// 意图回合的 AI 步骤；没有它就只能跑开场/环境/呈现这些不产生角色拍的循环。
+  final IntentBeatAgents? intentAgents;
   final Map<String, String> responseRevisions;
   final List<String> Function(List<String> eligible)? actorsDue;
 
@@ -648,21 +589,8 @@ class TurnLoop {
   /// GM_ROUTE 最多重试几次；只能返回 env 或 turn，其它输出带着错误重写。
   final int routeStepBudget;
 
-  /// GM_ELIGIBILITY 最多重试几次；返回 cast 外的名字就带着错误重写。
-  final int castStepBudget;
-
-  /// GM_SELECT_ACTOR 最多重试几次；返回 eligible 外的名字就带着错误重写。
-  final int selectActorStepBudget;
-
   /// 每个角色最多允许几次 CH_PERCEIVE：引用了候选集外的事件就带着错误重写。
   final int perceiveStepBudget;
-
-  /// 同一回合最多允许几个 CH_ACT step。这是回合预算，不是“改错次数”；
-  /// 合格行动会提前结束，预算耗尽就中止。
-  final int actStepBudget;
-
-  /// GM_RESOLVE_ACTION 最多重试几次；裁定不合格就带着错误重写。
-  final int resolveStepBudget;
 
   /// GM_ENV_UPDATE 最多重试几次；环境事件过不了 SYS_RECORD 校验就带着错误重写。
   final int environmentStepBudget;
@@ -673,7 +601,6 @@ class TurnLoop {
   final OpenPlaceDecider? openPlaceDecider;
   final RouteDecider? routeDecider;
   final EnvironmentSource? environmentSource;
-  final CastDecider? castDecider;
   final MergePlaceDecider? mergePlaceDecider;
 
   /// 有角色、但还没有 active 序列覆盖的地点；空 = 这回合不问 GM_OPEN_PLACE。
@@ -715,11 +642,6 @@ class TurnLoop {
   }
 
   int _seq;
-
-  String _eventId(String prefix) {
-    final String id = '$prefix${_seq++}';
-    return eventNamespace.isEmpty ? id : '$id-$eventNamespace';
-  }
 
   /// 跑一个 actor 回合。newEvents 是上一回合产生的事件。
   ///
@@ -949,36 +871,40 @@ class TurnLoop {
     // newEvents 已经占用了 E 编号；CH_ACT/SYS_RECORD 不能从同一个 startSeq 再发一遍。
     _seq = _nextEventSeq(incoming);
 
-    // CH_PERCEIVE：每个 NPC 只看自己还没感知过的新事件。
-    final ({Map<String, Map<String, Object?>> percepts, List<String> errors})
-        perceived = await _perceiveAndRemember(
-      events: incoming,
-      names: perceivers,
+    // 意图回合：一拍只有一个行动者。
+    return _runIntentTurn(
+      cast: actors.isNotEmpty
+          ? actors
+          : <String>[for (final CharacterSnapshot c in scene.cast) c.name],
+      incoming: incoming,
+      openPlace: openPlace,
+      route: route,
+      worldId: resume?.worldId ?? '',
       resume: resume,
     );
-    final Map<String, Map<String, Object?>> percepts = perceived.percepts;
-    final Map<String, Map<String, Object?>> scheduling = <String, Map<String, Object?>>{};
-    for (final String name in actors) {
-      final List<String> motivation = <String>[
-        for (final CharacterMemory m in memory.activeForCharacter('char:$name'))
-          '${m.text}${m.attention.isEmpty ? '' : '；当前关注：${m.attention}'}',
-        if (causalContext != null)
-          for (final EntityRecord p in causalContext!.state.ongoingProcesses)
-            if (p.state['owner'] == name) '${p.name}；完成条件：${p.state['completion_condition']}',
-        if (causalContext != null)
-          for (final InnerEntry i in causalContext!.state.inner)
-            if (i.characterId == 'char:$name' || i.characterId == name) i.text,
-      ];
-      // 全量记忆只供全知调度判断，不作为角色感知回灌给行为模型。
-      scheduling[name] = <String, Object?>{
-        ...?percepts[name], 'ongoing_motivation': motivation,
-      };
-    }
-    final List<String> perceiveErrors = perceived.errors;
-    if (perceiveErrors.isNotEmpty) {
+
+
+
+
+
+
+  }
+
+  /// 意图回合：在场角色各交一条意图，统一裁决，结果记进事件。
+  Future<TurnTrace> _runIntentTurn({
+    required List<String> cast,
+    required List<WorldEvent> incoming,
+    required OpenPlaceResult openPlace,
+    required String route,
+    required String worldId,
+    TurnSession? resume,
+  }) async {
+    final List<String> due = actorsDue?.call(cast) ?? cast;
+    final String? actor = due.isEmpty ? null : due.first;
+    if (actor == null) {
       return TurnTrace(
-        percepts: percepts,
-        eligible: const <String>[],
+        percepts: const <String, Map<String, Object?>>{},
+        eligible: cast,
         chosen: null,
         action: null,
         arbitration: null,
@@ -987,905 +913,191 @@ class TurnLoop {
         render: null,
         renderViolations: const <RenderViolation>[],
         blocked: const <FunctionalConstraint>[],
-        stop: null,
+        stop: const TurnStop(code: 'no_actor', reason: '没有可行动的角色'),
         actErrors: const <ActValidationError>[],
-        perceiveErrors: perceiveErrors,
         openPlace: openPlace,
-        environmentEvents: const <WorldEvent>[],
+        route: route,
+        cast: cast,
+        intentBeat: true,
       );
     }
-
-    // CH_PERCEIVE 的感知先落成角色记忆（还没有 CH_MEMORY_WRITE，程序只做组装）。
-    // GM_ELIGIBILITY：cast 可由 AI 声明；程序只允许它从当前场景里选。eligible 由程序算。
-    final List<String> sceneCast = <String>[
-      for (final CharacterSnapshot c in scene.cast) c.name,
-    ];
-    final TurnCheckpoint? castCheckpoint = resume?.checkpoints['GM_CAST'];
-    List<String> cast = sceneCast;
-    if (castCheckpoint != null) {
-      cast = _stringsFromCheckpoint(castCheckpoint.data['cast']);
-    } else if (castDecider != null) {
-      final List<String> errors = <String>[];
-      List<String> previous = sceneCast;
-      bool accepted = false;
-      for (int step = 1; step <= castStepBudget; step++) {
-        final List<String> raw = await _withAsk(
-          StepId.gmCast,
-          () => castDecider!(
-            scene: scene,
-            knownCast: sceneCast,
-            errors: errors,
-            previous: step == 1 ? null : previous,
-          ),
+    final IntentBeat beat = IntentBeat(
+      scene: scene,
+      agents: intentAgents!,
+      memory: memory,
+      controlledCharacter: controlledCharacter,
+      startSeq: _seq,
+      turnIndex: (causalContext?.state.worldStep ?? 0) + 1,
+      checkpoints: <String, Map<String, Object?>>{
+        for (final MapEntry<String, TurnCheckpoint> e
+            in (resume?.checkpoints ?? const <String, TurnCheckpoint>{}).entries)
+          e.key: e.value.data,
+      },
+      onCheckpoint: (String stage, Map<String, Object?> data) {
+        _stage(stage);
+        _checkpoint(stage, data);
+      },
+      sceneAt: (String place, Map<String, Object?> stateDelta) =>
+          _sceneAt(place, StateDelta.fromAction(stateDelta)),
+      validateDelta: (String who, Map<String, Object?> stateDelta) {
+        final TurnState? state = causalContext?.state;
+        if (state == null) return const <String>[];
+        return state.transitionErrors(
+          StateDelta.fromAction(stateDelta),
+          actor: who,
+          place: scene.place,
         );
-        final List<String> bad = <String>[
-          for (final String name in raw)
-            if (!sceneCast.contains(name)) name,
-        ];
-        if (bad.isEmpty) {
-          final List<String> unique = <String>[];
-          for (final String name in raw) {
-            if (!unique.contains(name)) unique.add(name);
-          }
-          cast = unique;
-          accepted = true;
-          break;
+      },
+      recall: ({
+        required String characterId,
+        required String delivered,
+        required List<CharacterMemory> active,
+      }) async {
+        final String recallStage = 'CH_MEMORY_RECALL:$characterId';
+        final TurnCheckpoint? savedRecall = resume?.checkpoints[recallStage];
+        final Object? savedIds = savedRecall?.data['memory_ids'];
+        if (savedIds is List) {
+          return <String>[for (final Object? id in savedIds) '$id'];
         }
-        errors
-          ..clear()
-          ..add('GM_CAST 返回了当前场景外的人：${bad.join('、')}');
-        previous = raw;
-      }
-      if (!accepted) {
-        return _decisionError(
-          openPlace: openPlace,
-          route: 'error',
-          castErrors: errors,
-          castFailureStep: StepId.gmCast,
+        final MemoryRecallService service = MemoryRecallService(
+          worldId: worldId,
+          characterId: characterId,
+          memory: memory.allEntries(),
+          currentMemory: memory.allEntries,
         );
-      }
-      _stage('GM_CAST');
-      _checkpoint('GM_CAST', <String, Object?>{'cast': cast});
-    } else {
-      _stage('GM_CAST');
-      _checkpoint('GM_CAST', <String, Object?>{'cast': cast});
-    }
-    // 不再排除上一回合 actor：同一角色可以连续行动。
-    final List<String> baseEligible =
-        actors.where((String n) => cast.contains(n)).toList();
-    final TurnCheckpoint? eligibleCheckpoint =
-        resume?.checkpoints['GM_ELIGIBILITY'];
-    List<String> eligible = const <String>[];
-    if (eligibleCheckpoint != null) {
-      eligible = _stringsFromCheckpoint(
-        eligibleCheckpoint.data['eligible'],
-      );
-    } else {
-      final List<String> errors = <String>[];
-      List<String> previous = const <String>[];
-      bool accepted = false;
-      for (int step = 1; step <= castStepBudget; step++) {
-        final List<String> raw = await _withAsk(
-          'GM_ELIGIBILITY',
-          () => agents.selectEligible(
-            baseEligible: baseEligible,
-            cast: cast,
-            playerNotes: scene.playerNotes,
-            errors: errors,
-            previous: step == 1 ? null : previous,
-          ),
+        final MemoryRecallResult recalled = await agents.recallWithArchive(
+          scene: scene,
+          percepts: <String, Object?>{'delivered': delivered},
+          service: service,
         );
-        final List<String> bad = <String>[
-          for (final String name in raw)
-            if (!baseEligible.contains(name)) name,
-        ];
-        if (bad.isEmpty) {
-          final List<String> unique = <String>[];
-          for (final String name in raw) {
-            if (!unique.contains(name)) unique.add(name);
-          }
-          eligible = unique;
-          accepted = true;
-          break;
-        }
-        errors
-          ..clear()
-          ..add(
-            'GM_ELIGIBILITY 返回了基础 eligible 之外的人：${bad.join('、')}。'
-            '只能从 base eligible 里排除，不能添加。',
-          );
-        previous = raw;
-      }
-      if (!accepted) {
-        return _decisionError(
-          openPlace: openPlace,
-          route: 'error',
-          castErrors: errors,
-        );
-      }
-      _stage('GM_ELIGIBILITY');
-      _checkpoint('GM_ELIGIBILITY', <String, Object?>{
-        'cast': cast,
-        'eligible': eligible,
-      });
-    }
-    if (eligible.isEmpty) {
-      return _runEnvironmentTurn(
-        openPlace: openPlace,
-        events: newEvents,
-        perceptionNames: perceivers,
-        resume: resume,
-        reason: '没有可行动角色，改为环境更新',
-      );
-    }
-
-    // GM_SELECT_ACTOR：AI 选唯一 actor
-    final TurnCheckpoint? selectActorCheckpoint = resume?.checkpoints['GM_SELECT_ACTOR'];
-    String? chosenCandidate;
-    if (selectActorCheckpoint != null) {
-      final String saved = '${selectActorCheckpoint.data['chosen'] ?? ''}'.trim();
-      if (saved.isEmpty || !eligible.contains(saved)) {
-        return _decisionError(
-          openPlace: openPlace,
-          route: 'error',
-          selectActorErrors: <String>['GM_SELECT_ACTOR checkpoint 里的角色不在 eligible 里：$saved'],
-        );
-      }
-      chosenCandidate = saved;
-    } else {
-      final List<String> selectable = actorsDue?.call(eligible) ?? eligible;
-      final List<String> errors = <String>[];
-      String? previous;
-      bool accepted = false;
-      for (int step = 1; step <= selectActorStepBudget; step++) {
-        final String? raw = await _withAsk(
-          'GM_SELECT_ACTOR',
-          () => agents.selectActor(
-            eligible: selectable,
-            percepts: scheduling,
-            playerNotes: scene.playerNotes,
-            errors: errors,
-            previous: step == 1 ? null : previous,
-          ),
-        );
-        final String name = (raw ?? '').trim();
-        if (name.isEmpty) {
-          errors
-            ..clear()
-            ..add('GM_SELECT_ACTOR 没有返回角色名。必须从 eligible 里选一个。');
-          previous = name;
-          continue;
-        }
-        if (!selectable.contains(name)) {
-          errors
-            ..clear()
-            ..add('GM_SELECT_ACTOR 选了 eligible 之外的人：$name');
-          previous = name;
-          continue;
-        }
-        chosenCandidate = name;
-        accepted = true;
-        break;
-      }
-      if (!accepted) {
-        return _decisionError(
-          openPlace: openPlace,
-          route: 'error',
-          selectActorErrors: errors,
-        );
-      }
-      _stage('GM_SELECT_ACTOR');
-      _checkpoint('GM_SELECT_ACTOR', <String, Object?>{
-        'eligible': eligible,
-        'chosen': chosenCandidate,
-      });
-    }
-    final String chosen = chosenCandidate!;
-
-    // 召回服务绑定角色、状态与预算；中间进度不是阶段完成。
-    final String recallStage = 'CH_MEMORY_RECALL:$chosen';
-    final TurnCheckpoint? recallCheckpoint =
-        resume?.checkpoints[recallStage];
-    late final MemoryRecallService recallService;
-    late final MemoryRecallResult recalled;
-    try {
-      final bool modern = recallCheckpoint?.data.containsKey('recall_protocol') ?? false;
-      recallService = MemoryRecallService(
-        worldId: resume?.worldId ?? '', characterId: 'char:$chosen',
-        memory: memory.allEntries(), currentMemory: memory.allEntries,
-        checkpoint: modern ? recallCheckpoint!.data : null,
-        allowRebase: responseRevisions.keys.any((String key) =>
-            key.startsWith('${StepId.chMemoryWrite}#$chosen#') ||
-            key.startsWith('checkpoint:${StepId.chMemoryWrite}:$chosen:') ||
-            key == 'checkpoint:${StepId.chMemoryWrite}:$chosen'),
-        onChanged: (Map<String, Object?> data) => _checkpoint(recallStage, data),
-      );
-      if (modern) recallService.applyRequestRevisions(responseRevisions);
-      if (modern && recallService.result != null) {
-        recalled = recallService.result!;
-      } else if (recallCheckpoint != null && !modern) {
-        // 旧 checkpoint 只能选择活动记忆，不获得归档访问权。
-        recalled = recallService.legacy(
-          _stringsFromCheckpoint(recallCheckpoint.data['memory_ids']));
-      } else {
-        recalled = await agents.recallWithArchive(
-          scene: scene, percepts: percepts[chosen] ?? <String, Object?>{},
-          service: recallService,
-        );
-        recallService.validate(recalled);
         if (recalled.activeIds != null) {
           _stage(recallStage);
-          _checkpoint(recallStage, recallService.result != null
-            ? recallService.toCheckpoint()
-            : <String, Object?>{
-                'character': 'char:$chosen',
-                'memory_ids': recalled.activeIds!.toList(),
-              });
+          _checkpoint(recallStage, <String, Object?>{
+            'character': characterId,
+            'memory_ids': recalled.activeIds!.toList(),
+          });
         }
-      }
-      recallService.validate(recalled);
-    } on MemoryRecallException catch (err) {
-      throw RetryExhaustedException(step: recallStage, reason: err.message);
-    }
-
-    // CH_ACT：该 actor 写行动记录。校验错误作为 observation 回给 CH_ACT，
-    // 同一回合继续，直到合格行动 / 回合预算耗尽。
-    final List<String> present = <String>[
-      for (final CharacterSnapshot c in scene.cast) c.name,
-    ];
-    final List<ActValidationError> actErrors = <ActValidationError>[];
-    // 裁定保存点已记录它实际使用的行动，续跑直接使用这对输入和结果。
-    final TurnCheckpoint? savedRuling = resume?.checkpoints[StepId.gmResolveAction];
-    final Object? ruledAction = savedRuling?.data['arbitration'] is Map &&
-            savedRuling?.data['actor'] == chosen
-        ? savedRuling?.data['action'] : null;
-    Map<String, Object?> action = ruledAction is Map
-        ? Map<String, Object?>.from(ruledAction) : <String, Object?>{};
-    bool actionValid = ruledAction is Map;
-    TurnCheckpoint? actCheckpoint = resume?.checkpoints['CH_ACT'];
-    Map<String, Object?>? revisedRecordAction;
-    if (actionValid && actCheckpoint != null &&
-        (responseRevisions.containsKey('checkpoint:${StepId.chAct}') ||
-            responseRevisions.containsKey(actCheckpoint.data['response_key']))) {
-      revisedRecordAction = actCheckpoint.data['action'] is Map
-          ? Map<String, Object?>.from(actCheckpoint.data['action'] as Map)
-          : <String, Object?>{};
-      final ActValidationError? savedError = _validateAct(revisedRecordAction, actor: chosen);
-      if (savedError != null) {
-        throw FormatException('修订后的行动不合格：${savedError.message}');
-      }
-    }
-    if (!actionValid && actCheckpoint != null) {
-      action = actCheckpoint.data['action'] is Map
-          ? Map<String, Object?>.from(actCheckpoint.data['action'] as Map)
-          : <String, Object?>{};
-      final ActValidationError? savedError = _validateAct(action, actor: chosen);
-      actionValid = savedError == null;
-      if (savedError != null) {
-        if (responseRevisions.containsKey('checkpoint:${StepId.chAct}') ||
-            responseRevisions.containsKey(actCheckpoint.data['response_key'])) {
-          throw FormatException('修订后的行动不合格：${savedError.message}');
-        }
-        actErrors.add(savedError);
-        actCheckpoint = null;
-        final List<String> invalidated = <String>[
-          StepId.chAct, StepId.gmResolveAction, StepId.sysRecord,
-          StepId.gmNarrate, StepId.gmMergePlace,
-          if (chosen == controlledCharacter) StepId.gmParseInput,
-        ];
-        for (final String stage in invalidated) {
-          _completed.remove(stage);
-          agents.prepareRetry(stage);
-        }
-        resume = resume?.withoutCheckpoints(invalidated);
-        _checkpoint('SYS_RECOVERY', <String, Object?>{
-          ..._completed[StepId.sysRecovery]!.data, 'invalidate': invalidated,
-        });
-      }
-    }
-    if (!actionValid && chosen == controlledCharacter) {
-      // 人控角色的 CH_ACT：等玩家输入，GM_PARSE_INPUT 在 workspace 的 provider 里解析。
-      final PlayerActionHandler? provider = playerActionHandler;
-      if (provider == null) {
-        return _playerActionStop(
-          openPlace: openPlace,
-          percepts: percepts,
-          eligible: eligible,
-          chosen: chosen,
-          reason: '轮到当前操控角色行动，但没有接玩家输入。',
-        );
-      }
-      final Map<String, Object?>? playerAction = await provider(
-        actor: chosen,
-        scene: scene,
-      );
-      if (playerAction == null) {
-        return _playerActionStop(
-          openPlace: openPlace,
-          percepts: percepts,
-          eligible: eligible,
-          chosen: chosen,
-          reason: '轮到当前操控角色行动，等待玩家输入。',
-        );
-      }
-      action = playerAction;
-      final ActValidationError? error = _validateAct(action, actor: chosen);
-      if (error != null) {
-        return _playerActionStop(
-          openPlace: openPlace,
-          percepts: percepts,
-          eligible: eligible,
-          chosen: chosen,
-          reason: '玩家行动不合格：${error.message}',
-          actErrors: <ActValidationError>[error],
-        );
-      }
-      actionValid = true;
-    } else if (!actionValid) {
-      for (int actStep = 1; actStep <= actStepBudget; actStep++) {
-        final Map<String, Object?> perceive =
-            percepts[chosen] ?? <String, Object?>{};
-        action = await agents.act(
-          name: chosen,
-          context: _characterContext(
-            'char:$chosen',
-            onlyMemoryIds: recalled.activeIds,
-            archivedContext: recallService.contextFor(recalled),
-          ),
-          perceive: _actInput(perceive, actErrors, action),
-          present: present,
-        );
-        final ActValidationError? error = _validateAct(action, actor: chosen);
-        if (error == null) {
-          actionValid = true;
-          break;
-        }
-        actErrors.add(error);
-      }
-    }
-    final TurnStop? stop = actionValid
-        ? null
-        : TurnStop(
-            code: 'step_budget',
-            reason: 'CH_ACT 连续 $actStepBudget 步没有给出合格行动',
-          );
-    if (stop != null) {
+        return (recalled.activeIds ??
+                <String>{for (final CharacterMemory m in active) m.id})
+            .toList();
+      },
+      playerIntent: playerActionHandler == null
+          ? null
+          : (String who) async {
+              final Map<String, Object?>? action =
+                  await playerActionHandler!(actor: who, scene: scene);
+              if (action == null) {
+                throw PlayerPausedException(PlayerQuestion(
+                  step: StepId.chIntent,
+                  code: 'player_action',
+                  reason: '轮到 $who 提交意图。',
+                  question: '轮到 $who 行动，请输入行动意图。',
+                ));
+              }
+              return _intentFromAction(who, action);
+            },
+    );
+    final IntentBeatResult result = await beat.run(
+      actor: actor,
+      incoming: incoming,
+      objectiveWorld: causalContext?.godText(scene.place) ?? '{}',
+      cast: cast,
+    );
+    final PublicClaim? claim = result.claim;
+    final IntentSettlement? settlement = result.settlement;
+    final WorldEvent? recorded = result.event;
+    if (!result.ok || claim == null || settlement == null || recorded == null) {
       return TurnTrace(
-        percepts: percepts,
-        eligible: eligible,
-        chosen: chosen,
-        action: action,
+        percepts: const <String, Map<String, Object?>>{},
+        eligible: cast,
+        chosen: actor,
+        action: null,
         arbitration: null,
         stateDelta: null,
         events: const <WorldEvent>[],
         render: null,
         renderViolations: const <RenderViolation>[],
         blocked: const <FunctionalConstraint>[],
-        stop: stop,
-        actErrors: actErrors,
+        stop: TurnStop(code: 'intent_beat', reason: result.errors.join('\n')),
+        actErrors: const <ActValidationError>[],
         openPlace: openPlace,
-        rejectedEvents: <WorldEvent>[
-          _rejectedEvent(chosen, action, stop.reason),
-        ],
+        route: route,
+        cast: cast,
+        intentBeat: true,
       );
     }
-
-    if (actCheckpoint == null && ruledAction is! Map) {
-      _stage('CH_ACT');
-      _checkpoint('CH_ACT', <String, Object?>{
-        'actor': chosen,
-        'action': action,
-      });
-    }
-    // 兜底：正常情况下 _validateAct 已经拦过；这里只防漏。
-    final List<String> requires = _requiredCapabilities(action);
-    final List<FunctionalConstraint> blocked = <FunctionalConstraint>[
-      for (final FunctionalConstraint c in constraints)
-        if (c.who == chosen &&
-            c.state == ConstraintState.cannot &&
-            requires.contains(c.capability))
-          c,
-    ];
-    if (blocked.isNotEmpty) {
-      return TurnTrace(
-        percepts: percepts,
-        eligible: eligible,
-        chosen: chosen,
-        action: action,
-        arbitration: null,
-        stateDelta: null,
-        events: const <WorldEvent>[],
-        render: null,
-        renderViolations: const <RenderViolation>[],
-        blocked: blocked,
-        stop: null,
-        actErrors: actErrors,
-        openPlace: openPlace,
-        rejectedEvents: <WorldEvent>[
-          _rejectedEvent(chosen, action, '功能限制：${blocked.map((c) => c.capability).join('、')}'),
-        ],
-      );
-    }
-
-    final TurnCheckpoint? resolveCheckpoint = resume?.checkpoints[StepId.gmResolveAction];
-    final TurnCheckpoint? cCheckpoint = resume?.checkpoints[StepId.sysRecord];
-    if (resolveCheckpoint == null && cCheckpoint == null) {
-      final TurnTrace? contested = await _contest(
-        choice: chosen, action: action, eligible: eligible, percepts: percepts, openPlace: openPlace, resume: resume,
-      );
-      if (contested != null) return contested;
-    }
-
-    // GM_RESOLVE_ACTION：只有物理/对抗行动才裁定。
-    Map<String, Object?>? arbitration;
-    if (resolveCheckpoint != null) {
-      final Object? saved = resolveCheckpoint.data['arbitration'];
-      if (saved is! Map) throw const FormatException('已保存的裁定缺少裁定结果。');
-      arbitration = Map<String, Object?>.from(saved);
-      final List<String> savedErrors = _validateArbitration(arbitration, actor: chosen, action: action);
-      if (savedErrors.isNotEmpty) {
-        throw FormatException('已保存裁定不符合当前状态：${savedErrors.join('；')}');
-      }
-      if (arbitration['outcome'] != 'unresolved') _applyDeltas(arbitration);
-    } else if (cCheckpoint == null && _requiresAr(action, chosen)) {
-      Map<String, Object?> last = <String, Object?>{};
-      final List<String> arErrors = <String>[];
-      for (int resolveStep = 1; resolveStep <= resolveStepBudget; resolveStep++) {
-        last = await _withAsk(
-          'GM_RESOLVE_ACTION',
-          () => agents.adjudicate(
-            action: action,
-            actor: chosen,
-            target: _firstTarget(chosen, action),
-            place: scene.place,
-            present: present,
-            errors: arErrors,
-            previous: resolveStep == 1 ? null : last,
-            playerNotes: scene.playerNotes,
-          ),
-        );
-        arErrors
-          ..clear()
-          ..addAll(_validateArbitration(last, actor: chosen, action: action));
-        if (arErrors.isEmpty) {
-          arbitration = last;
-          break;
-        }
-      }
-      if (arErrors.isNotEmpty) {
-        return TurnTrace(
-          percepts: percepts,
-          eligible: eligible,
-          chosen: chosen,
-          action: action,
-          arbitration: last,
-          stateDelta: null,
-          events: const <WorldEvent>[],
-          render: null,
-          renderViolations: const <RenderViolation>[],
-          blocked: const <FunctionalConstraint>[],
-          stop: null,
-          actErrors: actErrors,
-          resolveErrors: arErrors,
-          openPlace: openPlace,
-          environmentEvents: const <WorldEvent>[],
-          rejectedEvents: <WorldEvent>[
-            _rejectedEvent(chosen, action, 'GM_RESOLVE_ACTION 校验失败：${arErrors.join('；')}'),
-          ],
-        );
-      }
-      if (arbitration!['outcome'] != 'unresolved') _applyDeltas(arbitration);
-      _stage('GM_RESOLVE_ACTION');
-      _checkpoint('GM_RESOLVE_ACTION', <String, Object?>{
-        'actor': chosen,
-        'action': action,
-        'arbitration': arbitration,
-      });
-    }
-
-    if (arbitration?['outcome'] == 'unresolved') {
-      return TurnTrace(
-        percepts: percepts, eligible: eligible, chosen: chosen, action: action,
-        arbitration: arbitration, stateDelta: null, events: const <WorldEvent>[],
-        render: null, renderViolations: const <RenderViolation>[],
-        blocked: const <FunctionalConstraint>[], stop: null, actErrors: actErrors,
-        openPlace: openPlace, cast: cast, needsReview: true,
-      );
-    }
-
-    // 状态变化：对抗行动以 GM_RESOLVE_ACTION 为准；非对抗行动看 CH_ACT 的 state_delta。
-    final StateDelta stateDelta;
-    final List<WorldEvent> recorded;
-    if (cCheckpoint != null) {
-      stateDelta = StateDelta.fromAction(cCheckpoint.data['stateDelta']);
-      recorded = _eventsFromCheckpoint(cCheckpoint.data);
-      final List<String> savedErrors = causalContext?.state.transitionErrors(
-          stateDelta, actor: chosen, place: scene.place, adjudicated: arbitration != null) ?? <String>[];
-      if (savedErrors.isNotEmpty) {
-        throw FormatException('已保存状态变化不符合当前状态：${savedErrors.join('；')}');
-      }
-    } else {
-      stateDelta = arbitration != null
-          ? StateDelta.fromArbiter(arbitration)
-          : StateDelta.fromAction(action['state_delta']);
-      recorded = _record(chosen, revisedRecordAction ?? action, stateDelta, arbitration);
-      _stage('SYS_RECORD');
-      _checkpoint('SYS_RECORD', <String, Object?>{
-        'events': <Object?>[
-          for (final WorldEvent e in recorded) worldEventToJson(e),
-        ],
-        'stateDelta': stateDelta.toJson(),
-      });
-    }
-
-    final TurnPresentation? narration = deferPresentation
-        ? null
-        : await _narrate(recorded, resume?.checkpoints[StepId.gmNarrate]);
-    final List<String> reviewWarnings = narration?.warnings ?? const <String>[];
-    final List<WorldEvent> events = <WorldEvent>[
-      for (final WorldEvent event in recorded)
-        if (narration == null) event else
-          event.copyWith(publicText: narration.publicText, godNote: narration.godNote),
-    ];
-    final TurnCheckpoint? mergePlaceCheckpoint = resume?.checkpoints['GM_MERGE_PLACE'];
-    final MergePlaceResult mergePlace;
-    if (mergePlaceCheckpoint != null) {
-      mergePlace = _mergePlaceFromCheckpoint(mergePlaceCheckpoint.data);
-    } else {
-      mergePlace = await _decideMergePlace(
-        events: events,
-        remainingCast: _remainingCast(stateDelta),
-      );
-      _stage('GM_MERGE_PLACE');
-      _checkpoint('GM_MERGE_PLACE', <String, Object?>{
-        'merge': mergePlace.merge,
-        'why': mergePlace.why,
-        'into': mergePlace.into,
-      });
-    }
-    final bool needsReview =
-        '${arbitration?['outcome'] ?? ''}' == 'unresolved' ||
-            reviewWarnings.isNotEmpty;
-
+    // 过程步骤由 IntentBeat 的 onCheckpoint 逐段写回；这里只处理结果。
+    _seq += 1;
+    final StateDelta delta = StateDelta.fromAction(settlement.stateDelta);
+    final TurnPresentation? narration =
+        deferPresentation ? null : await _narrate(<WorldEvent>[recorded], null);
+    final WorldEvent event = narration == null
+        ? recorded
+        : recorded.copyWith(
+            publicText: narration.publicText,
+            godNote: narration.godNote,
+          );
+    final Map<String, Map<String, Object?>> percepts =
+        <String, Map<String, Object?>>{
+      actor: <String, Object?>{
+        'intent': result.intent?.text ?? '',
+        'result': settlement.result,
+        'self_text': settlement.selfText,
+      },
+      for (final MapEntry<String, String> seen in event.observations.entries)
+        if (seen.key.replaceFirst('char:', '') != actor)
+          seen.key.replaceFirst('char:', ''): <String, Object?>{
+            'seen': seen.value,
+          },
+    };
+    final MergePlaceResult mergePlace = await _decideMergePlace(
+      events: <WorldEvent>[event],
+      remainingCast: _remainingCast(delta),
+    );
     return TurnTrace(
       percepts: percepts,
-      eligible: eligible,
-      chosen: chosen,
-      action: action,
-      arbitration: arbitration,
-      stateDelta: stateDelta.isEmpty ? null : stateDelta,
-      events: events,
+      eligible: cast,
+      chosen: actor,
+      action: <String, Object?>{
+        'intent': result.intent?.text ?? '',
+        ...claim.toJson(),
+      },
+      arbitration: settlement.toJson(),
+      stateDelta: delta.isEmpty ? null : delta,
+      orderedDeltas: <StateDelta>[delta],
+      events: <WorldEvent>[event],
       render: narration?.render,
       renderViolations: narration?.check.violations ?? const <RenderViolation>[],
       blocked: const <FunctionalConstraint>[],
       stop: null,
-      actErrors: actErrors,
+      actErrors: const <ActValidationError>[],
       openPlace: openPlace,
       route: route,
-      environmentEvents: const <WorldEvent>[],
       mergePlace: mergePlace,
-      needsReview: needsReview,
-      reviewWarnings: reviewWarnings,
       cast: cast,
+      needsReview: settlement.result == 'unresolved',
+      intentBeat: true,
     );
   }
 
-  /// 单件物品或已知单值属性的互斥尝试共同引用同一份基础状态。
-  Future<TurnTrace?> _contest({
-    required String choice,
-    required Map<String, Object?> action,
-    required List<String> eligible,
-    required Map<String, Map<String, Object?>> percepts,
-    required OpenPlaceResult openPlace,
-    required TurnSession? resume,
-  }) async {
-    final ContestDecider? adjudicate = contestDecider;
-    final CausalContext? context = causalContext;
-    if (adjudicate == null || context == null) return null;
-    final TurnState base = context.state;
-    _ContestAttempt? candidateOf(String actor, Map<String, Object?> attempt, NarrativeScene location) {
-      if (identical(location, scene) && _validateAct(attempt, actor: actor) != null) return null;
-      final StateDelta delta = StateDelta.fromAction(attempt['state_delta']);
-      if (delta.isEmpty || delta.moves.isNotEmpty || delta.injuries.isNotEmpty ||
-          delta.constraints.isNotEmpty || delta.discoveries.isNotEmpty || delta.processes.isNotEmpty) {
-        return null;
-      }
-      final Set<_ActionClaim> claims = <_ActionClaim>{};
-      for (final StateItemDelta item in delta.items) {
-        if (item.kind != 'take' || item.to?.replaceFirst('char:', '') != actor ||
-            base.entities[item.itemId]?.kind != 'item') {
-          return null;
-        }
-        claims.add((subject: item.itemId, property: null, value: actor));
-      }
-      for (final StateFactDelta fact in delta.facts) {
-        final EntityRecord? entity = base.entities[fact.subject];
-        if (entity == null || fact.operation != 'set' ||
-            (entity.location != location.place && entity.location != 'place:${location.place}' &&
-                entity.id != 'place:${location.place}')) {
-          return null;
-        }
-        final int current = base.facts.where((FactRecord record) =>
-            record.untilEvent.isEmpty && record.subject == fact.subject && record.predicate == fact.predicate).length;
-        if (current != 1) return null;
-        claims.add((subject: fact.subject, property: fact.predicate, value: fact.object));
-      }
-      if (claims.map((claim) => (claim.subject, claim.property)).toSet().length != claims.length) return null;
-      return (scene: location, action: attempt, delta: delta, claims: claims);
-    }
-    final _ContestAttempt? first = candidateOf(choice, action, scene);
-    if (first == null) return null;
-    final _ActionClaim primary = first.claims.first;
-    final EntityRecord subject = base.entities[primary.subject]!;
-    final Map<String, NarrativeScene> candidates = <String, NarrativeScene>{
-      for (final String actor in eligible) if (actor != choice) actor: scene,
-    };
-    for (final ParallelPlaceInfo place in otherParallelPlaces) {
-      if (!place.isActive || sceneForPlace == null || !first.claims.any((claim) =>
-          claim.property == null && base.facts.any((FactRecord fact) =>
-            fact.untilEvent.isEmpty && fact.subject == claim.subject &&
-            fact.predicate == 'shared_access' && fact.object == place.place))) {
-        continue;
-      }
-      final NarrativeScene remote = sceneForPlace!(place.place);
-      for (final String actor in place.members) {
-        if (actor != choice && !base.constraints.any((FunctionalConstraint constraint) =>
-            constraint.who == actor && constraint.capability == 'act' &&
-            constraint.state == ConstraintState.cannot)) {
-          candidates.putIfAbsent(actor, () => remote);
+  CharacterIntent _intentFromAction(String actor, Map<String, Object?> action) {
+    final String intent = '${action['intent'] ?? ''}'.trim();
+    final List<String> parts = <String>[];
+    final Object? segments = action['segments'];
+    if (segments is List) {
+      for (final Object? segment in segments) {
+        if (segment is Map && '${segment['text'] ?? ''}'.trim().isNotEmpty) {
+          parts.add('${segment['text']}'.trim());
         }
       }
     }
-    final Map<String, _ContestAttempt> collected = <String, _ContestAttempt>{choice: first};
-    for (final MapEntry<String, NarrativeScene> candidate in candidates.entries) {
-      final String actor = candidate.key;
-      final NarrativeScene location = candidate.value;
-      final String stage = 'CH_ACT:contest:$actor';
-      final TurnCheckpoint? saved = resume?.checkpoints[stage];
-      final Map<String, Object?>? next;
-      if (saved != null && saved.data['action'] is Map) {
-        next = Map<String, Object?>.from(saved.data['action'] as Map);
-      } else {
-        next = actor == controlledCharacter
-            ? await playerActionHandler?.call(actor: actor, scene: location)
-            : await agents.act(
-                name: actor,
-                context: identical(location, scene)
-                    ? _characterContext('char:$actor')
-                    : context.characterView('char:$actor', location),
-                perceive: jsonEncode(percepts[actor] ?? const <String, Object?>{}),
-                present: location.cast.map((CharacterSnapshot character) => character.name).toList(),
-              );
-        if (next == null) {
-          return _playerActionStop(
-            openPlace: openPlace, percepts: percepts, eligible: eligible, chosen: actor,
-            reason: '轮到当前操控角色回应，整条时间线等待输入。',
-          );
-        }
-        _stage(stage);
-        _checkpoint(stage, <String, Object?>{'actor': actor, 'action': next});
-      }
-      final Map<String, Object?> attempt = next;
-      final _ContestAttempt? claim = candidateOf(actor, attempt, location);
-      if (claim == null) continue;
-      if (!identical(location, scene) && claim.claims.any((claim) =>
-          claim.property != null || !base.facts.any((FactRecord fact) =>
-              fact.untilEvent.isEmpty && fact.subject == claim.subject &&
-              fact.predicate == 'shared_access' && fact.object == location.place))) {
-        continue;
-      }
-      if (base.constraints.any((FunctionalConstraint constraint) =>
-          constraint.who == actor && constraint.state == ConstraintState.cannot &&
-          _requiredCapabilities(attempt).contains(constraint.capability))) {
-        continue;
-      }
-      collected[actor] = claim;
-    }
-    final Map<String, _ContestAttempt> attempts = <String, _ContestAttempt>{choice: first};
-    bool grew;
-    do {
-      grew = false;
-      for (final entry in collected.entries) {
-        if (!attempts.containsKey(entry.key) &&
-            attempts.values.any((other) => _relatedAttempts(entry.value, other))) {
-          attempts[entry.key] = entry.value;
-          grew = true;
-          break;
-        }
-      }
-    } while (grew);
-    if (attempts.length < 2) return null;
-
-    const String contestStage = 'GM_RESOLVE_ACTION:contest';
-    final Map<String, Set<String>> before = <String, Set<String>>{
-      for (final String actor in attempts.keys) actor: <String>{},
-    };
-    for (final String earlier in attempts.keys) {
-      final Object? boundary = attempts[earlier]!.action['time_boundary_id'];
-      if (boundary is! String || boundary.isEmpty) continue;
-      final Set<String> after = _laterBoundaries(base, boundary);
-      for (final String later in attempts.keys) {
-        if (after.contains(attempts[later]!.action['time_boundary_id'])) before[later]!.add(earlier);
-      }
-    }
-    final List<String> ordered = <String>[];
-    final Set<String> pending = attempts.keys.toSet();
-    while (pending.isNotEmpty) {
-      final String? next = pending.where((actor) => !before[actor]!.any(pending.contains)).firstOrNull;
-      if (next == null) break;
-      ordered.add(next);
-      pending.remove(next);
-    }
-    String? validateSuccesses(Set<String> successful) {
-      if (successful.isEmpty || !attempts.keys.toSet().containsAll(successful)) return '成功者必须是已收集的尝试者。';
-      if (pending.isNotEmpty) return '已记录的时间关系有循环。';
-      TurnState checking = base;
-      final List<String> previous = <String>[];
-      for (final String actor in ordered.where(successful.contains)) {
-        final _ContestAttempt attempt = attempts[actor]!;
-        if (previous.any((other) => !before[actor]!.contains(other) &&
-            _relatedAttempts(attempt, attempts[other]!))) {
-          return '无法确定先后的相关尝试不得同时改变前提或结果。';
-        }
-        if (!_contestPreconditionsHold(checking, attempt.action)) return '尝试的前提在轮到结算时不成立：$actor。';
-        final List<String> problems = checking.transitionErrors(attempt.delta, actor: actor, place: attempt.scene.place);
-        if (problems.isNotEmpty) return problems.join('；');
-        checking = checking.applyDelta(attempt.delta);
-        previous.add(actor);
-      }
-      return null;
-    }
-
-    final TurnCheckpoint? saved = resume?.checkpoints[contestStage];
-    Set<String> successful = <String>{};
-    final bool completelyOrdered = pending.isEmpty && ordered.indexed.every(
-      (entry) => before[entry.$2]!.containsAll(ordered.take(entry.$1)),
+    final String text = intent.isNotEmpty ? intent : parts.join('；');
+    return CharacterIntent(
+      id: 'intent:$actor:${DateTime.now().microsecondsSinceEpoch}',
+      actor: 'char:$actor',
+      text: text,
+      desired: text,
     );
-    if (saved == null && completelyOrdered) {
-      for (final String actor in ordered) {
-        if (validateSuccesses(<String>{...successful, actor}) == null) successful.add(actor);
-      }
-    }
-    if (successful.isNotEmpty) {
-      _stage(contestStage);
-      _checkpoint(contestStage, <String, Object?>{'successful': ordered.where(successful.contains).toList()});
-    } else {
-      final List<String> errors = <String>[];
-      for (int retry = 0; retry < resolveStepBudget; retry++) {
-        final Map<String, Object?> decision = saved != null
-            ? saved.data
-            : await adjudicate(subject.id, <Map<String, Object?>>[
-                for (final entry in attempts.entries)
-                  <String, Object?>{
-                    'actor': entry.key, 'place': entry.value.scene.place, 'action': entry.value.action,
-                    if (primary.property != null) 'contested_property': primary.property,
-                    if (before[entry.key]!.isNotEmpty) 'must_follow': before[entry.key]!.toList(),
-                  },
-              ], errors);
-        if (decision['outcome'] == 'unresolved') break;
-        final Set<String> proposed = decision['successful'] is List
-            ? (decision['successful'] as List).whereType<String>().toSet()
-            : <String>{'${decision['winner'] ?? ''}'};
-        final String? problem = validateSuccesses(proposed);
-        if (problem == null) {
-          successful = proposed;
-          if (saved == null) {
-            _stage(contestStage);
-            _checkpoint(contestStage, decision);
-          }
-          break;
-        }
-        if (saved != null) break;
-        errors.add(problem);
-      }
-    }
-    if (successful.isEmpty) {
-      final List<String> viable = ordered.where((actor) => validateSuccesses(<String>{actor}) == null).toList();
-      final String? ruling = await askPlayer?.call(PlayerQuestion(
-        step: contestStage, code: 'unresolved_action',
-        reason: '已收集各自的尝试，尚无足够依据确定实际结果。',
-        question: '哪项尝试成立？',
-        options: viable,
-      ));
-      if (ruling == null || !viable.contains(ruling)) {
-        return _playerActionStop(
-          openPlace: openPlace, percepts: percepts, eligible: eligible, chosen: choice,
-          reason: '冲突行动尚未裁定，整条时间线等待玩家。',
-        );
-      }
-      successful = <String>{ruling};
-      _stage(contestStage);
-      _checkpoint(contestStage, <String, Object?>{'winner': ruling});
-    }
-    final List<StateDelta> deltas = <StateDelta>[
-      for (final String actor in ordered.where(successful.contains)) attempts[actor]!.delta,
-    ];
-    String outcomeText(String actor) {
-      final _ContestAttempt attempt = attempts[actor]!;
-      if (attempt.claims.length == 1 && attempt.claims.single.property == null) {
-        final String item = base.entities[attempt.claims.single.subject]!.name;
-        return successful.contains(actor) ? '$actor取得了$item。' : '$actor试图取得$item，没有拿到。';
-      }
-      final String names = attempt.claims.map((claim) => base.entities[claim.subject]!.name).toSet().join('、');
-      return successful.contains(actor) ? '$actor成功操作了$names。' : '$actor试图操作$names，没有成功。';
-    }
-    final List<WorldEvent> recorded = <WorldEvent>[];
-    for (final String actor in ordered) {
-      final _ContestAttempt attempt = attempts[actor]!;
-      final bool success = successful.contains(actor);
-      final StateDelta delta = success ? attempt.delta : const StateDelta();
-      final Delivery delivery = Delivery(channel: DeliveryChannel.visual, form: 'gesture',
-          audience: attempt.delta.facts.every((fact) => fact.visibility == 'public')
-              ? Audience.scene : Audience.hidden);
-      recorded.add(cWriter.commitValidated(
-          event: WorldEvent(
-            id: 'CONTEST-${_seq++}', kind: WorldEventKind.action, actor: 'char:$actor',
-            content: outcomeText(actor),
-            delivery: delivery,
-            segments: <EventSegment>[
-              EventSegment(kind: WorldEventKind.action, text: outcomeText(actor), delivery: delivery),
-            ],
-            placeId: attempt.scene.place, turnIndex: base.worldStep + 1,
-            outcome: success ? 'success' : 'failure',
-            effects: delta.effectRecords,
-            stateChanges: success ? delta.toJson() : const <String, Object?>{},
-          ),
-          scene: attempt.scene, engine: engine,
-        ));
-    }
-    final TurnPresentation? narration = deferPresentation ? null : await _narrate(recorded, null);
-    return TurnTrace(
-      percepts: percepts, eligible: eligible, chosen: choice, action: action,
-      arbitration: <String, Object?>{
-        if (successful.length == 1) 'winner': successful.single,
-        'successful': ordered.where(successful.contains).toList(), 'outcome': 'resolved',
-      },
-      stateDelta: StateDelta.combine(deltas), orderedDeltas: deltas, events: recorded,
-      render: narration?.render,
-      renderViolations: narration?.check.violations ?? const <RenderViolation>[],
-      blocked: const <FunctionalConstraint>[], stop: null, actErrors: const <ActValidationError>[],
-      openPlace: openPlace, needsReview: narration?.warnings.isNotEmpty ?? false,
-    );
-  }
-
-  bool _contestPreconditionsHold(TurnState state, Map<String, Object?> action) {
-    final Object? preconditions = action['preconditions'];
-    if (preconditions == null) return true;
-    return preconditions is List && preconditions.every((Object? condition) =>
-        condition is Map && state.facts.any((FactRecord fact) =>
-          fact.untilEvent.isEmpty && fact.subject == condition['subject'] &&
-          fact.predicate == condition['predicate'] && fact.object == condition['object']));
-  }
-
-  bool _relatedAttempts(_ContestAttempt a, _ContestAttempt b) {
-    bool affects(Set<_ActionClaim> changes, Map<String, Object?> action) {
-      final Object? preconditions = action['preconditions'];
-      return preconditions is List && preconditions.any((condition) => condition is Map &&
-          changes.any((claim) => claim.subject == condition['subject'] && claim.property == condition['predicate']));
-    }
-    return affects(a.claims, b.action) || affects(b.claims, a.action) ||
-        a.claims.any((left) => b.claims.any((right) => left.subject == right.subject &&
-            left.property == right.property && left.value != right.value));
-  }
-
-  Set<String> _laterBoundaries(TurnState state, String boundary) {
-    final Set<String> known = <String>{
-      for (final FactRecord fact in state.facts)
-        if (fact.untilEvent.isEmpty && fact.predicate == 'time_boundary' && fact.evidence.trim().isNotEmpty) fact.id,
-    };
-    if (!known.contains(boundary)) return <String>{};
-    final Set<String> reached = <String>{};
-    final List<String> pending = <String>[boundary];
-    while (pending.isNotEmpty) {
-      final String current = pending.removeLast();
-      for (final FactRecord fact in state.facts) {
-        if (fact.untilEvent.isEmpty && fact.predicate == 'time_before' && fact.subject == current &&
-            known.contains(fact.object) && reached.add(fact.object)) {
-          pending.add(fact.object);
-        }
-      }
-    }
-    return reached;
   }
 
   Future<void> _askPlayerHelp(AskPlayerException error) async {
@@ -1961,9 +1173,6 @@ class TurnLoop {
     required String route,
     List<String> openPlaceErrors = const <String>[],
     List<String> routeErrors = const <String>[],
-    List<String> castErrors = const <String>[],
-    String castFailureStep = StepId.gmEligibility,
-    List<String> selectActorErrors = const <String>[],
   }) {
     return TurnTrace(
       percepts: const <String, Map<String, Object?>>{},
@@ -1982,35 +1191,6 @@ class TurnLoop {
       route: route,
       openPlaceErrors: openPlaceErrors,
       routeErrors: routeErrors,
-      castErrors: castErrors,
-      castFailureStep: castFailureStep,
-      selectActorErrors: selectActorErrors,
-    );
-  }
-
-  TurnTrace _playerActionStop({
-    required OpenPlaceResult openPlace,
-    required Map<String, Map<String, Object?>> percepts,
-    required List<String> eligible,
-    required String chosen,
-    required String reason,
-    List<ActValidationError> actErrors = const <ActValidationError>[],
-  }) {
-    return TurnTrace(
-      percepts: percepts,
-      eligible: eligible,
-      chosen: chosen,
-      action: null,
-      arbitration: null,
-      stateDelta: null,
-      events: const <WorldEvent>[],
-      render: null,
-      renderViolations: const <RenderViolation>[],
-      blocked: const <FunctionalConstraint>[],
-      stop: TurnStop(code: 'player_action', reason: reason),
-      actErrors: actErrors,
-      openPlace: openPlace,
-      route: 'player',
     );
   }
 
@@ -2172,9 +1352,45 @@ class TurnLoop {
     return errors;
   }
 
+  /// 按地点组一份现场：当前位置从权威状态和这次移动里算。
+  NarrativeScene _sceneAt(String place, StateDelta delta) {
+    final NarrativeScene? configured = sceneForPlace?.call(place);
+    final Map<String, CharacterSnapshot> cast = <String, CharacterSnapshot>{
+      if (place == scene.place)
+        for (final CharacterSnapshot c in scene.cast) c.id: c,
+      if (configured != null)
+        for (final CharacterSnapshot c in configured.cast) c.id: c,
+    };
+    final Map<String, String> locations = <String, String>{
+      if (causalContext != null)
+        for (final EntityRecord e in causalContext!.state.entities.values)
+          if (e.kind == 'character') e.name: e.location.replaceFirst('place:', ''),
+      ...?causalContext?.state.locations,
+      ...delta.moves,
+    };
+    final Map<String, String> names = <String, String>{
+      ...scene.names,
+      ...?configured?.names,
+      if (causalContext != null)
+        for (final EntityRecord e in causalContext!.state.entities.values)
+          if (e.kind == 'character') e.id: e.name,
+    };
+    for (final MapEntry<String, String> located in locations.entries) {
+      final String id = 'char:${located.key}';
+      if (located.value == place) {
+        cast.putIfAbsent(
+          id,
+          () => scene.byId(id) ??
+              CharacterSnapshot(id: id, name: located.key, nearby: true),
+        );
+      } else {
+        cast.remove(id);
+      }
+    }
+    return NarrativeScene(place: place, cast: cast.values.toList(), names: names);
+  }
+
   /// 本回合结束后还留在当前序列里的角色。
-  ///
-  /// 只有“人都走光了”的线才允许合并；否则把两列硬并会让人瞬移。
   List<String> _remainingCast(StateDelta delta) {
     final List<String> out = <String>[];
     for (final CharacterSnapshot c in scene.cast) {
@@ -2183,7 +1399,6 @@ class TurnLoop {
         out.add(c.name);
       }
     }
-    // 本回合刚走进来的人也算“本线还有人”。
     for (final MapEntry<String, String> e in delta.moves.entries) {
       if (e.value.trim() == scene.place.trim() && !out.contains(e.key)) {
         out.add(e.key);
@@ -2192,6 +1407,9 @@ class TurnLoop {
     return out;
   }
 
+  /// 本回合结束后还留在当前序列里的角色。
+  ///
+  /// 只有“人都走光了”的线才允许合并；否则把两列硬并会让人瞬移。
   /// GM_MERGE_PLACE：SYS_RECORD 先看有没有别的未合并序列；没有就不问。
   /// 有，且本线已经没人了，才让 GM_MERGE_PLACE 选目标；目标必须是现有的 active 序列。
   Future<MergePlaceResult> _decideMergePlace({
@@ -2517,7 +1735,7 @@ class TurnLoop {
       }
       List<String> warnings = <String>[];
       if (check.ok) {
-        final Object? reviewedRender = checkpoint?.data['reviewedRender'] ?? originalRender;
+        final Object reviewedRender = checkpoint?.data['reviewedRender'] ?? originalRender;
         final Object? stored = saved && jsonEncode(reviewedRender) == jsonEncode(revisedRender)
             ? checkpoint?.data['warnings'] : null;
         if (saved && stored == null && checkpoint?.data['warnings'] is List) {
@@ -2551,179 +1769,6 @@ class TurnLoop {
   }
 
   /// 用同一份世界位置构造目的地现场，保留该地角色自己的称呼。
-  NarrativeScene _sceneAt(String place, StateDelta delta) {
-    final NarrativeScene? configured = sceneForPlace?.call(place);
-    final Map<String, CharacterSnapshot> cast = <String, CharacterSnapshot>{
-      if (place == scene.place) for (final CharacterSnapshot c in scene.cast) c.id: c,
-      if (configured != null) for (final CharacterSnapshot c in configured.cast) c.id: c,
-    };
-    final Map<String, String> locations = <String, String>{
-      if (causalContext != null)
-        for (final EntityRecord e in causalContext!.state.entities.values)
-          if (e.kind == 'character') e.name: e.location.replaceFirst('place:', ''),
-      ...?causalContext?.state.locations,
-      ...delta.moves,
-    };
-    final Map<String, String> names = <String, String>{
-      ...scene.names, ...?configured?.names,
-      if (causalContext != null)
-        for (final EntityRecord e in causalContext!.state.entities.values)
-          if (e.kind == 'character') e.id: e.name,
-    };
-    for (final MapEntry<String, String> located in locations.entries) {
-      final String id = 'char:${located.key}';
-      if (located.value == place) {
-        cast.putIfAbsent(id, () => scene.byId(id) ?? CharacterSnapshot(
-          id: id, name: located.key, nearby: true));
-      } else {
-        cast.remove(id);
-      }
-    }
-    return NarrativeScene(place: place, cast: cast.values.toList(), names: names);
-  }
-
-  Iterable<NarrativeScene> _arrivalScenes(StateDelta delta) sync* {
-    for (final String place in delta.moves.values.toSet()) {
-      if (place != scene.place) yield _sceneAt(place, delta);
-    }
-  }
-
-  List<Witness> _arrivalWitnesses(WorldEvent event, StateDelta delta) {
-    final Map<String, Witness> witnesses = <String, Witness>{
-      for (final Witness w in event.witnesses) w.characterId: w,
-    };
-    for (final NarrativeScene destination in _arrivalScenes(delta)) {
-      if (event.observationsResolved) {
-        // 目的地只接收裁定给它的实际结果，不能看到出发地的尝试和秘密。
-        for (final CharacterSnapshot c in destination.cast) {
-          final String text = event.observations[c.id] ?? event.observations[c.name] ?? '';
-          if (text.trim().isNotEmpty && !witnesses.containsKey(c.id)) {
-            witnesses[c.id] = Witness(characterId: c.id, modality: 'sight',
-              content: engine.localize(text, c, destination));
-          }
-        }
-      } else {
-        // 确定性的直接移动同样产生到达见闻，传达范围仍受原动作约束。
-        for (final MapEntry<String, String> move in delta.moves.entries) {
-          if (move.value != destination.place) continue;
-          final WorldEvent arrival = WorldEvent(id: event.id, kind: WorldEventKind.action,
-            actor: 'char:${move.key}', content: '到达${move.value}',
-            delivery: event.delivery, source: 'movement', placeId: destination.place,
-            timeLabel: event.timeLabel);
-          for (final Witness w in engine.witnesses(arrival, destination)) {
-            witnesses.putIfAbsent(w.characterId, () => w);
-          }
-        }
-      }
-    }
-    return witnesses.values.toList();
-  }
-
-  List<String> _validateArbitration(Map<String, Object?>? a, {
-    String? actor, Map<String, Object?>? action,
-  }) {
-    if (a == null) return <String>['GM_RESOLVE_ACTION 没有返回结果'];
-    final List<String> errors = <String>[];
-    final String outcome = '${a['outcome'] ?? ''}'.trim();
-    if (!<String>{'success', 'failure', 'partial', 'unresolved'}
-        .contains(outcome)) {
-      errors.add('GM_RESOLVE_ACTION outcome 非法：$outcome');
-    }
-    final Object? deltas = a['deltas'];
-    if (deltas is! List) {
-      errors.add('GM_RESOLVE_ACTION deltas 必须是数组');
-    } else {
-      for (int i = 0; i < deltas.length; i++) {
-        final Object? d = deltas[i];
-        if (d is! Map) {
-          errors.add('GM_RESOLVE_ACTION deltas[$i] 不是对象');
-          continue;
-        }
-        final String kind = '${d['kind'] ?? ''}'.trim();
-        if (!<String>{'steal', 'take', 'give', 'drop', 'move', 'injure', 'constraint', 'none'}.contains(kind)) {
-          errors.add('GM_RESOLVE_ACTION deltas[$i] 的 kind 非法：$kind');
-        }
-        final Map<String, Object?> proposal = <String, Object?>{};
-        if (kind == 'move') {
-          proposal['move'] = <Object?, Object?>{d['id'] ?? d['actor'] ?? d['who']: d['to']};
-        } else if (kind == 'injure') {
-          proposal['injure'] = <Object?>[<String, Object?>{
-            'who': d['who'] ?? d['id'], 'part': d['part'],
-            'kind': d['injury_kind'] ?? d['wound_kind'],
-            for (final String key in <String>['cause', 'treatment', 'note'])
-              if (d.containsKey(key)) key: d[key],
-          }];
-        } else if (kind == 'constraint') {
-          proposal['constraints'] = <Object?>[<String, Object?>{
-            'who': d['who'] ?? d['id'], 'capability': d['capability'] ?? d['action'],
-            'state': d['state'], if (d.containsKey('reason')) 'reason': d['reason'],
-          }];
-        } else if (<String>{'steal', 'take', 'give', 'drop'}.contains(kind)) {
-          proposal['items'] = <Object?>[d];
-        }
-        errors.addAll(StateDelta.proposalErrors(proposal));
-        if (causalContext != null && kind != 'none') {
-          final StateDelta parsed = StateDelta.fromArbiter(<String, Object?>{'deltas': [d]});
-          if (parsed.isEmpty) errors.add('GM_RESOLVE_ACTION deltas[$i] 缺少该类型必需的状态字段');
-        }
-      }
-    }
-    if ('${a['reason'] ?? ''}'.trim().isEmpty) {
-      errors.add('GM_RESOLVE_ACTION reason 不能为空');
-    }
-    final String? timeLabelProblem =
-        timeLabelError(normalizeTimeLabel(a['time_label']));
-    if (timeLabelProblem != null) {
-      errors.add('GM_RESOLVE_ACTION 的 $timeLabelProblem');
-    }
-    errors.addAll(StateDelta.proposalErrors(<String, Object?>{
-      for (final String field in <String>['facts', 'discoveries', 'processes'])
-        if (a.containsKey(field)) field: a[field],
-    }));
-    if (causalContext != null) {
-      for (final String field in <String>['facts', 'discoveries', 'processes']) {
-        final Object? raw = a[field];
-        if (raw != null && (raw is! List || raw.any((Object? x) => x is! Map))) {
-          errors.add('GM_RESOLVE_ACTION $field 必须是对象数组');
-        }
-      }
-      if ('${a['result'] ?? ''}'.trim().isEmpty) errors.add('裁定必须记录实际结果 result');
-      if (a['observations'] is! Map) {
-        errors.add('裁定必须逐人给 observations，无人看见时用空对象');
-      } else {
-        final StateDelta movement = StateDelta.fromArbiter(a);
-        final List<NarrativeScene> arrivals = _arrivalScenes(movement).toList();
-        final Set<String> allowedObservers = <String>{
-          for (final CharacterSnapshot c in scene.cast) c.id,
-          for (final NarrativeScene arrival in arrivals)
-            for (final CharacterSnapshot c in arrival.cast) c.id,
-        };
-        for (final Object? key in (a['observations'] as Map).keys) {
-          final String id = '$key'.startsWith('char:') ? '$key' : 'char:$key';
-          if (!allowedObservers.contains(id)) errors.add('结果观察者不在行动涉及的现场：$key');
-          if ((a['observations'] as Map)[key] is! String) errors.add('逐人观察必须是文本：$key');
-        }
-        for (final NarrativeScene arrival in arrivals) {
-          for (final CharacterSnapshot c in arrival.cast) {
-            if (scene.byId(c.id) == null &&
-                !(a['observations'] as Map).containsKey(c.id) &&
-                !(a['observations'] as Map).containsKey(c.name)) {
-              errors.add('跨地点移动必须给出目的地角色 ${c.id} 的见闻；没有感知则明确写空文本');
-            }
-          }
-        }
-      }
-      errors.addAll(causalContext!.state.transitionErrors(StateDelta.fromArbiter(a),
-          actor: actor, place: scene.place));
-      if (outcome == 'success' && action != null &&
-          _actionKinds(action).contains('steal') &&
-          StateDelta.fromArbiter(a).items.isEmpty) {
-        errors.add('抢夺成功必须给出已确认物品的归属变化');
-      }
-    }
-    return errors;
-  }
-
   /// 这个事件在某个角色眼里是什么；优先用落账时存下的 witnesses。
   Witness? _witnessOf(WorldEvent e, String characterId) {
     if (e.receivedBy.contains(characterId)) return null;
@@ -3087,55 +2132,6 @@ class TurnLoop {
     }
   }
 
-  bool _requiresAr(Map<String, Object?> action, String actor) {
-    if (_actionKinds(action).any(needsAr) || action['resolution'] == 'adjudicate') return true;
-    final CausalContext? context = causalContext;
-    final StateDelta delta = StateDelta.fromAction(action['state_delta']);
-    if (context == null) return false;
-    final Object? preconditions = action['preconditions'];
-    if (preconditions is List) {
-      for (final Object? precondition in preconditions) {
-        if (precondition is! Map || !context.state.facts.any((FactRecord f) =>
-            f.untilEvent.isEmpty && f.subject == precondition['subject'] &&
-            f.predicate == precondition['predicate'] && f.object == precondition['object'])) {
-          return true;
-        }
-      }
-    }
-    if (delta.isEmpty) {
-      return (action['segments'] as List).any((Object? s) => s is Map && s['kind'] == 'action' &&
-          (action['resolution'] != 'direct' ||
-              !<String>{'gesture', 'wait', 'observe'}.contains(s['action_kind'])));
-    }
-    if (action['resolution'] != 'direct' || delta.injuries.isNotEmpty ||
-        delta.constraints.isNotEmpty || delta.facts.isNotEmpty ||
-        delta.discoveries.isNotEmpty || delta.processes.isNotEmpty) {
-      return true;
-    }
-    final TurnState state = context.state;
-    if (state.transitionErrors(delta, actor: actor, place: scene.place,
-        adjudicated: false).isNotEmpty) {
-      return true;
-    }
-    bool accessible(String subject) => state.facts.any((FactRecord f) =>
-        f.subject == subject && f.predicate == 'accessible' &&
-        f.object == 'true' && f.untilEvent.isEmpty);
-    for (final String destination in delta.moves.values) {
-      if (action['duration'] == 'extended' || !accessible('place:$destination') ||
-          !state.facts.any((FactRecord f) => f.untilEvent.isEmpty &&
-              f.subject == 'place:${scene.place}' && f.predicate == 'connected_to' &&
-              f.object == destination)) {
-        return true;
-      }
-    }
-    for (final StateItemDelta item in delta.items) {
-      if (item.kind == 'take' && item.from != actor && !accessible(item.from ?? '')) {
-        return true;
-      }
-    }
-    return false;
-  }
-
   String _perceiveInput(
     String events,
     List<String> errors,
@@ -3147,278 +2143,6 @@ class TurnLoop {
         '请只引用上面【新事件】里的 event_id，重写。';
   }
 
-  String _actInput(
-    Map<String, Object?> perceive,
-    List<ActValidationError> errors,
-    Map<String, Object?> previousAction,
-  ) {
-    final String base = jsonEncode(perceive);
-    if (errors.isEmpty) return base;
-    return '$base\n\n【上一次 CH_ACT 输出】\n'
-        '${jsonEncode(previousAction)}\n'
-        '【CH_ACT 校验失败】\n'
-        '${jsonEncode(errors.last.toJson())}\n'
-        '请修正后重写；如果动作与状态冲突，换一个当前状态能做到的行动。';
-  }
-
-  ActValidationError? _validateAct(
-    Map<String, Object?> action, {
-    required String actor,
-  }) {
-    try {
-      return _validateActRecord(action, actor: actor);
-    } on FormatException catch (error) {
-      return ActValidationError(code: 'ambiguous_reference', message: error.message);
-    }
-  }
-
-  ActValidationError? _validateActRecord(
-    Map<String, Object?> action, {
-    required String actor,
-  }) {
-    final String status = '${action['status'] ?? ''}'.trim();
-    if (status.isNotEmpty) {
-      return ActValidationError(
-        code: 'status_not_allowed',
-        message: 'CH_ACT 不接受 status=$status；写正常行动。不能行动就写一条 action 段，例如“她没有动”。',
-      );
-    }
-    final Object? raw = action['segments'];
-    if (raw is! List || raw.isEmpty) {
-      return const ActValidationError(
-        code: 'segments',
-        message: 'CH_ACT 没有 segments',
-      );
-    }
-    final String timeLabel = normalizeTimeLabel(action['time_label']);
-    final String? timeLabelProblem = timeLabelError(timeLabel);
-    if (timeLabelProblem != null) {
-      return ActValidationError(
-        code: 'time_label',
-        message: 'CH_ACT 的 $timeLabelProblem',
-      );
-    }
-    if (action['duration'] != null &&
-        !<String>{'instant', 'brief', 'extended'}.contains(action['duration'])) {
-      return const ActValidationError(code: 'duration', message: 'duration 只能是 instant、brief 或 extended');
-    }
-    if (action['resolution'] != null &&
-        !<String>{'direct', 'adjudicate'}.contains(action['resolution'])) {
-      return const ActValidationError(code: 'resolution', message: 'resolution 只能是 direct 或 adjudicate');
-    }
-    if (action['preconditions'] != null && (action['preconditions'] is! List ||
-        (action['preconditions'] as List).any((Object? p) => p is! Map ||
-            p['subject'] is! String || p['predicate'] is! String || p['object'] is! String))) {
-      return const ActValidationError(code: 'preconditions', message: 'preconditions 必须是 subject/predicate/object 前提数组');
-    }
-    if (raw.where((Object? x) => x is Map && x['kind'] == 'action').length > 1) {
-      return const ActValidationError(code: 'action_boundary',
-          message: '每步最多一个动作；后续动作、跨地点后行动和多目标对抗留到下一步');
-    }
-    if (action['wait_for_response'] == true &&
-        raw.any((Object? x) => x is Map && x['kind'] == 'action')) {
-      return const ActValidationError(code: 'response_boundary',
-          message: '等待别人回应时不能同时预先执行依赖回应的动作');
-    }
-    for (int i = 0; i < raw.length; i++) {
-      final Object? item = raw[i];
-      if (item is! Map) {
-        return ActValidationError(
-          code: 'segment_type',
-          message: 'CH_ACT segment[$i] 不是对象',
-          segmentIndex: i,
-        );
-      }
-      final Map<String, Object?> seg = item.cast<String, Object?>();
-      final String kind = '${seg['kind'] ?? ''}'.trim();
-      if ((kind != 'speech' && kind != 'action') || seg['kind'] != kind) {
-        return ActValidationError(
-          code: 'segment_kind',
-          message: 'CH_ACT segment[$i] 的 kind 只能是 speech 或 action',
-          segmentIndex: i,
-        );
-      }
-      final Object? text = seg['text'];
-      if (text is! String ||
-          (kind == 'action' ? _actionText(actor, text) : text.trim()).isEmpty) {
-        return ActValidationError(code: 'empty_content',
-            message: 'CH_ACT segment[$i] 必须有非空正文', segmentIndex: i);
-      }
-      final Object? delivery = seg['delivery'];
-      if (delivery is! Map ||
-          !<String>{'voice', 'visual', 'mental', 'digital', 'other'}.contains(delivery['channel']) ||
-          delivery['form'] is! String || (delivery['form'] as String).trim().isEmpty) {
-        return ActValidationError(code: 'delivery',
-            message: 'CH_ACT segment[$i] 必须有有效的 channel、form 和 audience', segmentIndex: i);
-      }
-      final Object? rawTarget = seg['target'];
-      if (rawTarget != null && rawTarget is! String) {
-        return ActValidationError(code: 'target_type',
-            message: 'CH_ACT segment[$i] 的 target 必须是文本或 null', segmentIndex: i);
-      }
-      final String target = resolveTarget(actor, '${rawTarget ?? ''}') ?? '${rawTarget ?? ''}'.trim();
-      final List<CValidationError> eventErrors = cWriter.validate(WorldEvent(
-        id: '', kind: kind == 'speech' ? WorldEventKind.speech : WorldEventKind.action,
-        content: kind == 'action' ? _actionText(actor, text) : text,
-        actor: 'char:$actor', target: target.isEmpty ? null : target,
-        delivery: Delivery(
-          channel: deliveryChannelOf('${delivery['channel']}'), form: '${delivery['form']}',
-          audience: audienceOf('${delivery['audience'] ?? delivery['range'] ?? 'unknown'}'),
-        ),
-      ), scene);
-      if (eventErrors.isNotEmpty) {
-        return ActValidationError(code: eventErrors.first.code,
-            message: eventErrors.first.message, segmentIndex: i);
-      }
-      if (seg['action_kind'] != null &&
-          !<String>{...kArKinds, 'gesture', 'wait', 'observe', 'move', 'take', 'give', 'drop'}.contains(seg['action_kind'])) {
-        return ActValidationError(code: 'action_kind', message: '不认识的行动类型：${seg['action_kind']}', segmentIndex: i);
-      }
-      if (!seg.containsKey('requires')) {
-        return ActValidationError(
-          code: 'missing_requires',
-          message: 'CH_ACT segment[$i] 缺少 requires；没有要求也要写 []，不能省略或写 null',
-          segmentIndex: i,
-        );
-      }
-      final Object? requires = seg['requires'];
-      if (requires is! List) {
-        return ActValidationError(
-          code: 'requires_type',
-          message: 'CH_ACT segment[$i] 的 requires 必须是数组；没有要求就写 []',
-          segmentIndex: i,
-        );
-      }
-      for (final Object? r in requires) {
-        final String s = '$r'.trim();
-        if (s.isEmpty) {
-          return ActValidationError(
-            code: 'requires_empty',
-            message: 'CH_ACT segment[$i] 的 requires 里有空字符串',
-            segmentIndex: i,
-          );
-        }
-        if (!kCapabilities.contains(s)) {
-          return ActValidationError(
-            code: 'unknown_capability',
-            message: 'CH_ACT segment[$i] 的 requires 不认识：$s',
-            segmentIndex: i,
-          );
-        }
-      }
-      if (!seg.containsKey('perceivable_by')) {
-        return ActValidationError(
-          code: 'missing_perceivable_by',
-          message: 'CH_ACT segment[$i] 缺少 perceivable_by；没有额外限制就写 []',
-          segmentIndex: i,
-        );
-      }
-      final Object? perceivable = seg['perceivable_by'];
-      if (perceivable is! List) {
-        return ActValidationError(
-          code: 'perceivable_by_type',
-          message: 'CH_ACT segment[$i] 的 perceivable_by 必须是数组',
-          segmentIndex: i,
-        );
-      }
-      for (final Object? p in perceivable) {
-        if ('$p'.trim().isEmpty) {
-          return ActValidationError(
-            code: 'perceivable_by_empty',
-            message: 'CH_ACT segment[$i] 的 perceivable_by 里有空字符串',
-            segmentIndex: i,
-          );
-        }
-      }
-    }
-
-    final List<String> requires = _requiredCapabilities(action);
-    final List<String> blocked = <String>[
-      for (final FunctionalConstraint c in constraints)
-        if (c.who == actor &&
-            c.state == ConstraintState.cannot &&
-            requires.contains(c.capability))
-          '${c.capability}${c.reason.isEmpty ? '' : '（${c.reason}）'}',
-    ];
-    if (blocked.isNotEmpty) {
-      return ActValidationError(
-        code: 'capability_blocked',
-        message: '当前状态不允许 ${blocked.join('、')}；'
-            '换一个不需要这些能力的行动，或写“没有动/没有回答”。',
-      );
-    }
-
-    final Object? rawDelta = action['state_delta'];
-    final List<String> deltaErrors = StateDelta.proposalErrors(rawDelta);
-    if (deltaErrors.isNotEmpty) {
-      return ActValidationError(code: 'state_delta_type', message: deltaErrors.join('；'));
-    }
-    if (rawDelta != null && rawDelta is! Map) {
-      return const ActValidationError(code: 'state_delta_type', message: 'state_delta 必须是对象或 null');
-    }
-    if (rawDelta is Map) {
-      final StateDelta delta = StateDelta.fromAction(rawDelta);
-      if (!delta.isEmpty) {
-        final bool hasAction = raw.any(
-          (Object? item) => item is Map && '${item['kind']}' == 'action',
-        );
-        if (!hasAction) {
-          return const ActValidationError(
-            code: 'state_delta_without_action',
-            message: 'state_delta 非空时至少要有一条 action segment；只有台词不能改位置/伤势/物品',
-          );
-        }
-      }
-    }
-    return null;
-  }
-
-  List<String> _requiredCapabilities(Map<String, Object?> action) {
-    final Object? raw = action['segments'];
-    if (raw is! List) return const <String>[];
-    final Set<String> out = <String>{};
-    for (final Object? item in raw) {
-      if (item is! Map) continue;
-      // 语音台词必然需要发声，不能依赖模型自行填写。
-      if (item['kind'] == 'speech' && item['delivery'] is Map &&
-          (item['delivery'] as Map)['channel'] == 'voice') {
-        out.add('speak');
-      }
-      final Object? requires = item['requires'];
-      if (requires is! List) continue;
-      for (final Object? r in requires) {
-        final String s = '$r'.trim();
-        if (s.isNotEmpty) out.add(s);
-      }
-    }
-    return out.toList();
-  }
-
-  List<String> _actionKinds(Map<String, Object?> action) {
-    final Object? raw = action['segments'];
-    if (raw is! List) return const <String>[];
-    final List<String> out = <String>[];
-    for (final Object? item in raw) {
-      if (item is Map) {
-        final String kind = '${item['action_kind'] ?? ''}';
-        if (kind.isNotEmpty) out.add(kind);
-      }
-    }
-    return out;
-  }
-
-  String? _firstTarget(String actor, Map<String, Object?> action) {
-    final Object? raw = action['segments'];
-    if (raw is! List) return null;
-    for (final Object? item in raw) {
-      if (item is! Map || item['kind'] != 'action') continue;
-      final String t = '${item['target'] ?? ''}'.trim();
-      if (t.isEmpty) continue;
-      return resolveTarget(actor, t) ?? t;
-    }
-    return null;
-  }
-
   int _nextEventSeq(List<WorldEvent> events) {
     int next = _seq;
     for (final WorldEvent e in events) {
@@ -3427,165 +2151,6 @@ class TurnLoop {
       if (n != null && n >= next) next = n + 1;
     }
     return next;
-  }
-
-  WorldEvent _rejectedEvent(
-    String actor,
-    Map<String, Object?> action,
-    String reason,
-  ) {
-    String text = '';
-    WorldEventKind kind = WorldEventKind.action;
-    final Object? raw = action['segments'];
-    if (raw is List && raw.isNotEmpty && raw.first is Map) {
-      final Map<String, Object?> seg =
-          (raw.first! as Map).cast<String, Object?>();
-      text = '${seg['text'] ?? ''}'.trim();
-      if ('${seg['kind']}' == 'speech') kind = WorldEventKind.speech;
-    }
-    final String content = text.isEmpty ? reason : text;
-    return WorldEvent(
-      id: _eventId('GM_NARRATE'),
-      kind: kind,
-      content: content,
-      actor: 'char:$actor',
-      delivery: const Delivery(
-        channel: DeliveryChannel.other,
-        form: 'rejected',
-        audience: Audience.hidden,
-      ),
-      status: WorldEventStatus.rejected,
-      source: 'character_action',
-      placeId: scene.place,
-      timeLabel: normalizeTimeLabel(action['time_label']),
-    );
-  }
-
-  List<WorldEvent> _record(
-    String actor,
-    Map<String, Object?> action,
-    StateDelta delta,
-    Map<String, Object?>? arbitration,
-  ) {
-    final List<Map<String, Object?>> extracted =
-        cWriter.extract(action).segments;
-    if (extracted.isEmpty) return const <WorldEvent>[];
-    // 时间标记：这一步自己的优先；行动没写时才用裁定的，都没有就留空。
-    final String ownTimeLabel = normalizeTimeLabel(action['time_label']);
-    final String stepTimeLabel = ownTimeLabel.isNotEmpty
-        ? ownTimeLabel
-        : normalizeTimeLabel(arbitration?['time_label']);
-    final List<Map<String, Object?>> turnEffects = delta.effectRecords;
-    bool effectsAssigned = false;
-    final List<WorldEvent> out = <WorldEvent>[];
-    for (final Map<String, Object?> s in extracted) {
-      final String kind = '${s['kind'] ?? ''}';
-      if (kind != 'speech' && kind != 'action') continue;
-      final String text = '${s['text'] ?? ''}';
-      final String targetRaw = '${s['target'] ?? ''}';
-      final String target = resolveTarget(actor, targetRaw) ?? targetRaw;
-      final bool targetIsChar = target.isNotEmpty &&
-          (scene.byId(
-                target.startsWith('char:') ? target : 'char:$target',
-              ) !=
-              null);
-      final String? eventTarget = target.isEmpty
-          ? null
-          : (targetIsChar
-              ? (target.startsWith('char:') ? target : 'char:$target')
-              : target);
-      final Object? dRaw = s['delivery'];
-      final Map<String, Object?> d =
-          dRaw is Map ? dRaw.cast<String, Object?>() : <String, Object?>{};
-      final String actionText = kind == 'action' ? _actionText(actor, text) : text;
-      final WorldEventKind eventKind = kind == 'speech'
-          ? WorldEventKind.speech
-          : WorldEventKind.action;
-      final String content = kind == 'speech' ? text : actionText;
-      final DeliveryChannel channel =
-          deliveryChannelOf('${d['channel'] ?? 'other'}');
-      final List<String> perceivableBy = s['perceivable_by'] is List
-          ? (s['perceivable_by']! as List)
-              .map((Object? x) => '$x')
-              .toList()
-          : const <String>[];
-      final Delivery delivery = Delivery(
-        channel: channel,
-        form: '${d['form'] ?? 'other'}',
-        audience: audienceOf('${d['audience'] ?? d['range'] ?? 'unknown'}'),
-      );
-      final Set<String> linkMembers = <String>{};
-      if (channel == DeliveryChannel.mental ||
-          channel == DeliveryChannel.digital ||
-          delivery.audience == Audience.link) {
-        if (eventTarget != null && eventTarget.startsWith('char:')) {
-          linkMembers.add(eventTarget);
-        }
-        linkMembers.add('char:$actor');
-        for (final String p in perceivableBy) {
-          final String id =
-              p.trim().startsWith('char:') ? p.trim() : 'char:${p.trim()}';
-          if (id.length > 'char:'.length) linkMembers.add(id);
-        }
-      }
-      final bool attachEffects =
-          kind == 'action' && !effectsAssigned && turnEffects.isNotEmpty;
-      if (attachEffects) effectsAssigned = true;
-      WorldEvent event = WorldEvent(
-        id: _eventId('E'),
-        kind: eventKind,
-        content: content,
-        actor: 'char:$actor',
-        target: eventTarget,
-        delivery: delivery,
-        linkMembers: linkMembers.toList(),
-        deliveryNote: '${s['delivery_note'] ?? ''}',
-        distanceNote: '${s['distance_note'] ?? ''}',
-        manner: '${s['manner'] ?? action['manner'] ?? ''}',
-        segments: <EventSegment>[
-          EventSegment(
-            kind: eventKind,
-            text: content,
-            target: eventTarget,
-            delivery: delivery,
-            perceivableBy: perceivableBy,
-          ),
-        ],
-        effects: attachEffects
-            ? turnEffects
-            : const <Map<String, Object?>>[],
-        outcome: kind == 'action' ? '${arbitration?['outcome'] ?? ''}' : '',
-        result: kind == 'action' ? '${arbitration?['result'] ?? ''}' : '',
-        observationsResolved: kind == 'action' && arbitration?['observations'] is Map,
-        observations: kind == 'action' && arbitration?['observations'] is Map
-            ? (arbitration!['observations'] as Map).map(
-                (Object? k, Object? v) => MapEntry('$k', '$v')) : const {},
-        status: WorldEventStatus.proposed,
-        source: actor == controlledCharacter ? 'player' : 'npc',
-        placeId: scene.place,
-        timeLabel: stepTimeLabel,
-        turnIndex: (causalContext?.state.worldStep ?? 0) + 1,
-        duration: '${action['duration'] ?? 'brief'}',
-      );
-      event = cWriter.commitValidated(
-        event: event,
-        scene: scene,
-        engine: engine,
-      );
-      if (kind == 'action' && delta.moves.isNotEmpty) {
-        event = event.copyWith(witnesses: _arrivalWitnesses(event, delta));
-      }
-      out.add(event);
-    }
-    return out;
-  }
-
-  /// 动作摘要：去掉重复的 actor 名和句首“她/他”，再做规范名替换。
-  String _actionText(String actor, String text) {
-    String t = text.trim();
-    if (t.startsWith(actor)) t = t.substring(actor.length);
-    if (t.startsWith('她') || t.startsWith('他')) t = t.substring(1);
-    return canonicalize(t, scene, speakerId: 'char:$actor');
   }
 
   /// 把角色嘴里的称呼解析回 cast 名字。
@@ -3607,35 +2172,4 @@ class TurnLoop {
     return null;
   }
 
-  void _applyDeltas(Map<String, Object?> arbitration) {
-    final Object? raw = arbitration['deltas'];
-    if (raw is! List || ledger == null) return;
-    for (final Object? item in raw) {
-      if (item is! Map) continue;
-      final Map<String, Object?> d = item.cast<String, Object?>();
-      final String kind = '${d['kind'] ?? ''}';
-      if (kind == 'steal') {
-        final String itemId = '${d['item_id'] ?? ''}';
-        final String from = '${d['from'] ?? ''}';
-        final String to = '${d['to'] ?? ''}';
-        if (itemId.isNotEmpty && from.isNotEmpty && to.isNotEmpty) {
-          ledger!.give(fromId: from, toId: to, itemId: itemId);
-        }
-      } else if (kind == 'drop') {
-        final String itemId = '${d['item_id'] ?? ''}';
-        final String by = '${d['by'] ?? d['from'] ?? ''}';
-        final String place = '${d['place'] ?? d['to'] ?? ''}';
-        if (itemId.isNotEmpty && by.isNotEmpty && place.isNotEmpty) {
-          ledger!.drop(actorId: by, itemId: itemId, placeId: place);
-        }
-      } else if (kind == 'move') {
-        final String id = '${d['id'] ?? d['actor'] ?? ''}';
-        final String to = '${d['to'] ?? ''}';
-        if (id.isNotEmpty && to.isNotEmpty) {
-          ledger!.moveEntity(id, to);
-        }
-      }
-      // injure / none：先记录在裁定里，账本暂不改。
-    }
-  }
 }
